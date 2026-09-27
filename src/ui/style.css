@@ -64,3 +64,14 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color:
 .meter.blade.low label { color: var(--danger); }
 .meter .spares { margin-left: 8px; letter-spacing: 1px; color: #e8f0f8; }
 .meter .spares i { font-style: normal; opacity: 0.35; }
+.danger { position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0; transition: opacity 0.1s; }
+.danger.show { opacity: 1; }
+.danger-arrow { position: absolute; left: -16px; top: -16px; width: 0; height: 0; border-left: 16px solid transparent; border-right: 16px solid transparent; border-bottom: 26px solid var(--danger); filter: drop-shadow(0 0 6px rgba(255, 60, 30, 0.9)); transform-origin: 16px 16px; animation: pulse 0.25s infinite alternate; }
+.danger-label { position: absolute; left: -60px; width: 120px; top: 44px; text-align: center; font-weight: 900; letter-spacing: 3px; color: var(--danger); font-size: 18px; }
+@keyframes pulse { from { opacity: 1; } to { opacity: 0.45; } }
+.struggle { position: absolute; left: 50%; top: 68%; width: 360px; margin-left: -180px; white-space: nowrap; text-align: center; display: none; }
+.struggle.show { display: block; animation: shake 0.12s infinite; }
+.struggle-label { font-weight: 900; letter-spacing: 2px; font-size: 20px; color: #fff; margin-bottom: 6px; }
+.struggle .bar { height: 16px; background: rgba(0, 0, 0, 0.5); border: 2px solid #fff; border-radius: 4px; overflow: hidden; }
+.struggle .fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), #fff3c4); }
+@keyframes shake { 0% { transform: translate(1px, 0); } 50% { transform: translate(-1px, 1px); } 100% { transform: translate(0, -1px); } }

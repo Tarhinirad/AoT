@@ -15,6 +15,8 @@ import { GrappleView } from '../grapple/grappleView.js';
 import { CombatSystem } from '../combat/combatSystem.js';
 import { Feedback } from '../combat/feedback.js';
 import { GiantManager } from '../giants/giantManager.js';
+import { GiantBrain } from '../giants/ai.js';
+import { GRAB_ESCAPE, escapeRequired, struggle } from '../giants/aiStateMachine.js';
 import { SpeedLines } from '../fx/speedLines.js';
 import { Particles } from '../fx/particles.js';
 import { Hud } from '../ui/hud.js';
@@ -57,6 +59,9 @@ export class Game {
     this.grappleView = new GrappleView(this.scene);
     this.combat = new CombatSystem();
     this.giants = new GiantManager(this.scene, this.colliders, this.rng);
+    this.giants.brainFactory = (g) => new GiantBrain(g, this.rng, this.colliders);
+    this.grab = null; // {giant, side, progress, required}
+    this.pendingStruggle = 0;
     this.particles = new Particles(this.scene, this.quality.particles);
 
     this.raycastHookable = (ox, oy, oz, dx, dy, dz, max, out) => this.raycastHookTargets(ox, oy, oz, dx, dy, dz, max, out);
@@ -96,7 +101,7 @@ export class Game {
       render: (dt, alpha) => this.render(dt, alpha),
     });
 
-    this.spawnTestGiant();
+    this.spawnSandbox();
   }
 
   _buildStartOverlay() {
@@ -115,18 +120,12 @@ export class Game {
     }
   }
 
-  /** M3 sandbox: a single giant that plods toward the player. */
-  spawnTestGiant() {
-    const g = this.giants.spawn('large', -45, -10, 0, 14);
-    g.brain = {
-      update: (dt) => {
-        const p = this.player.pos;
-        const dx = p.x - g.pos.x, dz = p.z - g.pos.z;
-        const d = Math.hypot(dx, dz);
-        g.desiredYaw = Math.atan2(dx, dz);
-        g.desiredSpeed = d > g.H * 0.6 ? g.cfg.walk : 0;
-      },
-    };
+  /** M4 sandbox: one giant of each variant around the district. */
+  spawnSandbox() {
+    this.giants.spawn('small', -60, -40, 0);
+    this.giants.spawn('medium', 70, -30, 0);
+    this.giants.spawn('large', 0, -110, 0);
+    this.giants.spawn('abnormal', 90, 120, Math.PI);
   }
 
   applyQuality() {
@@ -187,7 +186,11 @@ export class Game {
     if (inp.pressed('hookLeft')) this.pendingFire[0] = true;
     if (inp.pressed('hookRight')) this.pendingFire[1] = true;
     if (inp.pressed('release')) this.grapple.releaseAll();
-    if (inp.pressed('slash')) this.pendingSlash = true;
+    if (inp.pressed('slash')) {
+      if (this.player.grabbed) this.pendingStruggle += GRAB_ESCAPE.slashValue;
+      else this.pendingSlash = true;
+    }
+    if (this.player.grabbed && inp.pressed('struggle')) this.pendingStruggle += 1;
     if (inp.pressed('swap')) this.combat.trySwap();
     this.controls.reel[0] = inp.isDown('hookLeft');
     this.controls.reel[1] = inp.isDown('hookRight');
@@ -227,17 +230,23 @@ export class Game {
       if (this.combat.trySlash()) this.playerView.triggerSlash();
     }
 
-    g.step(dt, p, this.controls, this.raycastHookable);
-    this.intent.hooked = g.attachedCount > 0;
-    this.intent.jump = this.controls.boost && p.grounded && !this.intent.hooked;
-    p.integrate(dt, this.intent);
-    g.constrain(p);
-    p.collide(this.colliders, dt);
-    this.giants.resolvePlayer(p);
+    if (p.grabImmunity > 0) p.grabImmunity -= dt;
+    if (p.grabbed) {
+      this.updateGrabbed(dt);
+    } else {
+      g.step(dt, p, this.controls, this.raycastHookable);
+      this.intent.hooked = g.attachedCount > 0;
+      this.intent.jump = this.controls.boost && p.grounded && !this.intent.hooked;
+      p.integrate(dt, this.intent);
+      g.constrain(p);
+      p.collide(this.colliders, dt);
+      this.giants.resolvePlayer(p);
+    }
 
     this.giants.step(dt, { player: p, game: this });
     this.combat.step(dt, p, this.cameraRig.forward, this.giants.giants);
 
+    if (!p.alive) this.handleDeath(dt);
     if (p.pendingImpact > 0) {
       p.damage(p.pendingImpact);
       this.cameraRig.addShake(Math.min(0.8, p.pendingImpact * 0.05));
@@ -245,6 +254,92 @@ export class Game {
       p.pendingImpact = 0;
     }
     this.processEvents();
+  }
+
+  /** Temporary (M4): respawn at the plaza a few seconds after dying. */
+  handleDeath(dt) {
+    if (this.grab) this.releaseGrab(false);
+    if (this.deadT === undefined || this.deadT <= 0) {
+      this.deadT = 3;
+      this.feedback.killBanner('YOU DIED', 'respawning...');
+      this.grapple.releaseAll();
+      return;
+    }
+    this.deadT -= dt;
+    if (this.deadT <= 0) {
+      this.player.reset(SPAWN);
+      this.grapple.reset();
+      this.combat.reset();
+      this.player.grabImmunity = 3;
+    }
+  }
+
+  /** Player is in a giant's fist: follow the hand, take crush damage, struggle. */
+  updateGrabbed(dt) {
+    const p = this.player;
+    const gr = this.grab;
+    const giant = gr.giant;
+    this.grapple.step(dt, p, { reel: [false, false], boost: false, look: this.controls.look }, this.raycastHookable);
+    const st = giant.brain.state;
+    if (!giant.alive || (st !== 'hold' && st !== 'grab')) {
+      this.releaseGrab(true);
+      return;
+    }
+    const hand = giant.rig.hitboxes.find((h) => h.name === 'hand' + gr.side);
+    p.prevPos.copy(p.pos);
+    p.pos.copy(hand.world);
+    p.vel.set(0, 0, 0);
+    p.damage(GRAB_ESCAPE.crushDps * dt);
+    const r = struggle(gr.progress, this.pendingStruggle, dt, gr.required);
+    this.pendingStruggle = 0;
+    gr.progress = r.progress;
+    if (r.escaped) this.releaseGrab(true);
+  }
+
+  onGrabbed(giant, side) {
+    const p = this.player;
+    if (p.grabbed || !p.alive) return;
+    p.grabbed = true;
+    this.grab = { giant, side, progress: 0, required: escapeRequired(giant.H) };
+    this.pendingStruggle = 0;
+    this.grapple.releaseAll();
+    p.damage(GRAB_ESCAPE.initialDamage);
+    this.cameraRig.addShake(0.7);
+    this.feedback.screenFlash('rgba(200,20,10,0.45)');
+    this.feedback.toast('GRABBED!', 1.2);
+  }
+
+  /** @param {boolean} escaped true if the player broke free (vs. being dropped) */
+  releaseGrab(escaped) {
+    const p = this.player;
+    const gr = this.grab;
+    if (!gr) return;
+    p.grabbed = false;
+    p.grabImmunity = 2.5;
+    this.grab = null;
+    gr.giant.brain?.releasePlayer();
+    // Fling the player clear of the giant.
+    tmpV.subVectors(p.pos, gr.giant.pos).setY(0).normalize();
+    p.vel.set(tmpV.x * 10, escaped ? 13 : 4, tmpV.z * 10);
+    p.pos.addScaledVector(tmpV, 1.5);
+    p.prevPos.copy(p.pos);
+    if (escaped && gr.giant.alive) {
+      gr.giant.stagger(tmpV, 1.0);
+      gr.giant.flashT = 0.15;
+      this.feedback.toast('ESCAPED!');
+      this.particles.emit(p.pos, 20, { color: 0xd85a4a, speed: 8, spread: 1, size: 0.5, grow: 1, life: 0.8, gravity: 6, drag: 2 });
+    }
+  }
+
+  onSwiped(giant, dir) {
+    const p = this.player;
+    if (p.grabbed || !p.alive) return;
+    p.damage(18);
+    this.grapple.releaseAll();
+    p.vel.addScaledVector(dir, 24);
+    p.vel.y += 9;
+    this.cameraRig.addShake(0.6);
+    this.feedback.screenFlash('rgba(200,30,10,0.4)');
   }
 
   processEvents() {
@@ -289,7 +384,19 @@ export class Game {
     this.combat.events.length = 0;
 
     for (const e of this.giants.events) {
-      if (e.type === 'death') {
+      if (e.type === 'grab') {
+        this.onGrabbed(e.giant, e.side);
+      } else if (e.type === 'swipeHit') {
+        this.onSwiped(e.giant, e.dir);
+      } else if (e.type === 'bite') {
+        if (this.grab?.giant === e.giant) {
+          this.player.damage(GRAB_ESCAPE.biteDamage);
+          this.cameraRig.addShake(0.9);
+          this.feedback.screenFlash('rgba(160,0,0,0.6)');
+          this.releaseGrab(false);
+        }
+      } else if (e.type === 'death') {
+        if (this.grab?.giant === e.giant) this.releaseGrab(true);
         const n = e.giant.napeWorld;
         this.particles.emit(n, 40, { color: 0xf2efe8, speed: 5, spread: 1, size: 1.6, grow: 2.2, life: 2.2, gravity: -3, drag: 1.2, alpha: 0.45, jitter: 1 });
       } else if (e.type === 'bodyfall') {
@@ -297,7 +404,6 @@ export class Game {
         this.cameraRig.addShake(Math.min(0.7, (g.H / 15) * 8 / (8 + this.player.pos.distanceTo(g.pos) * 0.3)));
         tmpV.set(g.pos.x + Math.sin(g.yaw) * g.H * 0.6, 0.5, g.pos.z + Math.cos(g.yaw) * g.H * 0.6);
         this.particles.emit(tmpV, 40, { color: 0xb3a58c, speed: g.H * 0.8, spread: 1, size: 2, grow: 3, life: 1.8, gravity: 2, drag: 2, alpha: 0.5, jitter: g.H * 0.4 });
-        if (this.giants.aliveCount === 0 && this.sandbox !== false) setTimeout(() => this.spawnTestGiant(), 3000);
       } else if (e.type === 'step') {
         const g = e.giant;
         const d = this.player.pos.distanceTo(g.pos);
@@ -319,6 +425,7 @@ export class Game {
     renderPos.lerpVectors(p.prevPos, p.pos, alpha);
     this.playerView.update(frameDt, renderPos, p, this.cameraRig.yaw, this.grapple.attachedCount > 0);
     this.playerView.setBladesVisible(!this.combat.blades.broken);
+    this.cameraRig.extraDistance = p.grabbed ? 5 : 0;
     this.cameraRig.update(frameDt, renderPos, p.speed, this.colliders, this.settings.fovEffects);
     this.grapple.updateOrigins(renderPos, this.cameraRig.right);
     this.grappleView.update(this.grapple, this.grapple.origins);
@@ -341,6 +448,32 @@ export class Game {
     hs.blade = this.combat.blades.durability;
     hs.bladeMax = this.combat.blades.max;
     hs.spares = this.combat.blades.spares;
+    hs.danger = this.findDanger();
+    hs.struggle = this.grab ? { pct: this.grab.progress / this.grab.required, key: `${this.bindingLabel('struggle')} / ${this.bindingLabel('slash')}` } : null;
     this.hud.update(hs);
+  }
+
+  /** Nearest giant winding up an attack, as a screen-space direction for the HUD. */
+  findDanger() {
+    let best = null, bestD = 70;
+    for (const g of this.giants.giants) {
+      if (!g.alive || !g.brain?.telegraphing) continue;
+      const d = g.pos.distanceTo(this.player.pos);
+      if (d < bestD) {
+        bestD = d;
+        best = g;
+      }
+    }
+    if (!best) return null;
+    tmpV.copy(best.rig.hitboxes[3].world).project(this.camera);
+    let x = tmpV.x, y = tmpV.y;
+    if (tmpV.z > 1) {
+      x = -x;
+      y = -y;
+    }
+    this._danger = this._danger || {};
+    this._danger.angle = Math.atan2(x, y);
+    this._danger.kind = best.brain.state === 'grabWindup' ? 'grab' : 'swipe';
+    return this._danger;
   }
 }

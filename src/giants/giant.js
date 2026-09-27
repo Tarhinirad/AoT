@@ -48,6 +48,7 @@ export class Giant {
     this.deathT = 0;
     this.removable = false;
     this.flashT = 0;
+    this.telegraph = 0; // 0..1 attack windup glow, set by the brain
     this.staggerT = 0;
     this.staggerSide = 1;
     this.anim = { walk: 0, phase: rng.range(0, 6.28), sprint: 0 };
@@ -139,7 +140,9 @@ export class Giant {
     this.root.rotation.y = this.yaw;
     poseGiant(this.rig, this.anim);
     const f = Math.max(0, this.flashT) / 0.15;
-    this.rig.skin.emissive.setRGB(f * 0.8, f * 0.25, f * 0.15);
+    // Windup telegraph: pulsing red glow that speeds up as the attack nears.
+    const tg = this.alive ? this.telegraph * (0.55 + 0.45 * Math.sin(performance.now() * 0.02 * (1 + this.telegraph))) : 0;
+    this.rig.skin.emissive.setRGB(Math.max(f * 0.8, tg * 0.55), f * 0.25, f * 0.15);
     this.updateHitboxes();
   }
 

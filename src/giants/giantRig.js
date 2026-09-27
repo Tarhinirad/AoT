@@ -95,6 +95,7 @@ export function buildGiantRig(H, rng, abnormal = false) {
   const arms = {};
   for (const [side, s] of [['L', 1], ['R', -1]]) {
     const sh = mk('shoulder' + side, chest, s * 0.14, 0.05, 0);
+    sh.rotation.order = 'YXZ'; // pitch the arm first, then yaw it horizontally (aiming / sweeping)
     mesh(G.sphere, skin, sh, 0.085, 0.085, 0.085);
     const up = 0.18 * armL, fore = 0.17 * armL;
     const upper = new THREE.Group();
@@ -179,30 +180,34 @@ export function poseGiant(rig, p) {
   bones.neck.rotation.y = p.headYaw || 0;
   bones.neck.rotation.z = p.headTilt || 0;
 
-  // Arms: walk swing, blended with reach/swipe poses.
+  // Arms: walk swing, blended with reach (grab/hold) and swipe poses.
+  // Shoulder order is YXZ: rz spreads the hanging arm, rx pitches it forward
+  // (-PI/2 = horizontal), ry then yaws it left/right.
   for (const [side, s] of [['L', 1], ['R', -1]]) {
     const arm = arms[side];
     const sw = Math.sin(ph + (s > 0 ? Math.PI : 0)) * (0.35 + sprint * 0.5) * w;
     let rx = sw, rz = s * 0.12, ry = 0, ex = -0.25 - sprint * 0.6;
-    const reach = side === 'L' ? p.reachL || 0 : p.reachR || 0;
-    if (reach > 0) {
-      // Raise arm forward toward target elevation (reachPitch: 0 = forward, + up)
-      const pitch = -Math.PI / 2 - (p.reachPitch || 0);
-      rx = rx + (pitch - rx) * reach;
-      rz = rz + (s * (p.reachSpread || 0.15) - rz) * reach;
-      ex = ex + (-0.15 - ex) * reach;
-    }
-    const swipe = side === 'L' ? p.swipeL || 0 : p.swipeR || 0;
-    if (swipe !== 0) {
-      // swipe: -1..1 sweep across the body at shoulder height
-      rx = rx + (-1.45 - rx) * Math.min(1, Math.abs(swipe) * 3);
-      ry = -s * swipe * 1.3;
-      rz = s * 0.4;
-      ex = -0.2;
-    }
     if (p.crawl) {
       rx = -1.2 + sw * 0.6;
       ex = -0.3;
+    }
+    const reach = side === 'L' ? p.reachL || 0 : p.reachR || 0;
+    if (reach > 0) {
+      const pitch = -Math.PI / 2 - (p.reachPitch || 0);
+      const yaw = side === 'L' ? p.reachYawL || 0 : p.reachYawR || 0;
+      rx += (pitch - rx) * reach;
+      ry += (yaw - ry) * reach;
+      rz += (0 - rz) * reach;
+      ex += ((p.reachElbow ?? -0.15) - ex) * reach;
+    }
+    const swipe = side === 'L' ? p.swipeL : p.swipeR;
+    if (swipe !== undefined && swipe !== null) {
+      // swipe in [-1, 1]: -1 = arm drawn out to its own side, +1 = swept across the front.
+      const k = p.swipeBlend ?? 1;
+      rx += (-Math.PI / 2 - (p.swipePitch || 0) - rx) * k;
+      ry += (-s * swipe * 1.35 - ry) * k;
+      rz += (0 - rz) * k;
+      ex += (-0.2 - ex) * k;
     }
     arm.shoulder.rotation.set(rx, ry, rz);
     arm.elbow.rotation.x = ex;

@@ -36,6 +36,7 @@ export class GiantManager {
   }
 
   step(dt, ctx) {
+    this._separate();
     for (let i = this.giants.length - 1; i >= 0; i--) {
       const g = this.giants[i];
       if (g.alive && g.brain) g.brain.update(dt, ctx);
@@ -68,6 +69,28 @@ export class GiantManager {
       if (d.life <= 0) {
         this.scene.remove(d.obj);
         this.debris.splice(i, 1);
+      }
+    }
+  }
+
+  /** Keep giants from walking through each other. */
+  _separate() {
+    const gs = this.giants;
+    for (let i = 0; i < gs.length; i++) {
+      const a = gs[i];
+      if (!a.alive) continue;
+      for (let j = i + 1; j < gs.length; j++) {
+        const b = gs[j];
+        if (!b.alive) continue;
+        const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
+        const min = a.radius + b.radius;
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= min * min || d2 < 1e-6) continue;
+        const d = Math.sqrt(d2);
+        const push = (min - d) / 2;
+        const nx = dx / d, nz = dz / d;
+        a.pos.x -= nx * push; a.pos.z -= nz * push;
+        b.pos.x += nx * push; b.pos.z += nz * push;
       }
     }
   }

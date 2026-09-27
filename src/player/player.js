@@ -39,6 +39,7 @@ export class Player {
     this.lastImpactSpeed = 0;
     this.alive = true;
     this.grabbed = false;
+    this.grabImmunity = 0;
     this._contactN = new THREE.Vector3();
   }
 
@@ -53,6 +54,7 @@ export class Player {
     this.health = this.maxHealth;
     this.alive = true;
     this.grabbed = false;
+    this.grabImmunity = 0;
     this.airTime = 0;
   }
 

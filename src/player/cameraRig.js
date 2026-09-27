@@ -15,6 +15,7 @@ export class CameraRig {
     this.pitch = -0.15;
     this.baseDistance = 6.2;
     this.distance = 6.2;
+    this.extraDistance = 0;
     this.shoulder = 0.7;
     this.focus = new THREE.Vector3();
     this.baseFov = 72;
@@ -58,7 +59,7 @@ export class CameraRig {
     this.forward.set(-Math.sin(this.yaw) * cp, sp, -Math.cos(this.yaw) * cp);
     this.right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
-    const desiredDist = this.baseDistance + invLerp(15, 60, speed) * 2.5;
+    const desiredDist = this.baseDistance + invLerp(15, 60, speed) * 2.5 + this.extraDistance;
     this.distance = damp(this.distance, desiredDist, 4, dt);
 
     // Desired camera position: behind focus along -forward, shifted right.
