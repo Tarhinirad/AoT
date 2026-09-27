@@ -75,9 +75,9 @@ export function saveSettings(settings) {
 }
 
 export const QUALITY_PRESETS = {
-  low: { pixelRatio: 0.75, shadows: false, shadowSize: 0, particles: 600, fogFar: 380, antialias: false },
-  medium: { pixelRatio: 1.0, shadows: true, shadowSize: 1024, particles: 1500, fogFar: 520, antialias: true },
-  high: { pixelRatio: 2.0, shadows: true, shadowSize: 2048, particles: 3000, fogFar: 700, antialias: true },
+  low: { pixelRatio: 0.75, shadows: false, shadowSize: 0, particles: 800, fogFar: 400, antialias: false, post: false, bloom: false },
+  medium: { pixelRatio: 1.0, shadows: true, shadowSize: 2048, particles: 1800, fogFar: 560, antialias: true, post: true, bloom: true },
+  high: { pixelRatio: 2.0, shadows: true, shadowSize: 4096, particles: 3000, fogFar: 720, antialias: true, post: true, bloom: true },
 };
 
 /** Human readable label for a key/mouse code. */

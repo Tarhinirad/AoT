@@ -84,3 +84,36 @@ describe('city generation', () => {
     expect(hits).toBe(0);
   });
 });
+
+describe('medieval town layout', () => {
+  const city = generateCity(1337);
+
+  it('has every building style, stalls, props and wall towers', () => {
+    const styles = new Set(city.buildings.map((b) => b.style));
+    for (const s of ['house', 'hall', 'round', 'keep', 'bell', 'pillar']) expect(styles.has(s)).toBe(true);
+    expect(city.stalls.length).toBeGreaterThan(6);
+    expect(city.wallTowers.length).toBeGreaterThan(8);
+    expect(city.chimneys.length).toBeGreaterThan(50);
+  });
+
+  it('never overlaps two building footprints (including jettied upper floors)', () => {
+    const bs = city.buildings.filter((b) => !b.pillar);
+    const ext = (b) => ({ x: b.w / 2 + (b.jx ?? 0), z: b.d / 2 + (b.jz ?? 0) });
+    for (let i = 0; i < bs.length; i++) {
+      for (let j = i + 1; j < bs.length; j++) {
+        const a = bs[i], b = bs[j], ea = ext(a), eb = ext(b);
+        const ox = ea.x + eb.x - Math.abs(a.x - b.x);
+        const oz = ea.z + eb.z - Math.abs(a.z - b.z);
+        expect(ox > 0.01 && oz > 0.01, `${a.style}@${a.x.toFixed(1)},${a.z.toFixed(1)} vs ${b.style}@${b.x.toFixed(1)},${b.z.toFixed(1)}`).toBe(false);
+      }
+    }
+  });
+
+  it('gives round towers cylinder colliders a hook can hit', () => {
+    const cols = buildColliders(city, new StaticColliders());
+    const t = city.buildings.find((b) => b.style === 'round');
+    const out = {};
+    expect(cols.raycast(t.x - 40, t.h * 0.5, t.z, 1, 0, 0, 100, out)).toBe(true);
+    expect(out.dist).toBeCloseTo(40 - t.w / 2, 0);
+  });
+});

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyRopeConstraint, takeUpSlack, pullFade, hookPullAccel, boostDirection, drainGas, pendulumPeriod, GRAPPLE,
+  swingSteer, softArrivalLimit, applySoftArrival, releaseBoostAmount, regenGas,
 } from '../src/grapple/ropeMath.js';
 
 const v = (x, y, z) => ({ x, y, z });
@@ -121,5 +122,79 @@ describe('boost direction and gas', () => {
     expect(drainGas(10, 5, 1)).toEqual({ gas: 5, ok: true });
     expect(drainGas(0, 5, 1)).toEqual({ gas: 0, ok: false });
     expect(drainGas(2, 5, 1)).toEqual({ gas: 0, ok: true });
+  });
+});
+
+describe('swing control', () => {
+  it('steers along the arc, never along the rope', () => {
+    const out = v(0, 0, 0);
+    // Hanging straight below the anchor: horizontal steering passes through unchanged.
+    swingSteer(v(1, 0, 0), v(0, 1, 0), out);
+    expect(out).toEqual(v(1, 0, 0));
+    // Pushing straight at the anchor does nothing.
+    swingSteer(v(0, 0, -1), v(0, 0, -1), out);
+    expect(len(out)).toBeCloseTo(0);
+  });
+
+  it('never pushes the body downward', () => {
+    const out = v(0, 0, 0);
+    const up = Math.SQRT1_2;
+    swingSteer(v(0, 0, -1), v(0, up, -up), out);
+    expect(out.y).toBe(0);
+    // Past the anchor, forward steering lifts you up the back of the arc.
+    swingSteer(v(0, 0, -1), v(0, up, up), out);
+    expect(out.y).toBeGreaterThan(0);
+    expect(out.z).toBeLessThan(0);
+  });
+});
+
+describe('soft arrival', () => {
+  it('allows fast approaches far away and slow ones close in', () => {
+    expect(softArrivalLimit(60)).toBeGreaterThan(70);
+    expect(softArrivalLimit(GRAPPLE.arrivalStop)).toBe(2);
+    expect(softArrivalLimit(5)).toBeLessThan(softArrivalLimit(10));
+  });
+
+  it('removes only the excess speed toward the anchor when far from it', () => {
+    const vel = v(5, 0, -80);
+    const cut = applySoftArrival(vel, v(0, 0, -1), 30, 1 / 120);
+    const limit = softArrivalLimit(30);
+    expect(cut).toBeCloseTo(80 - limit);
+    expect(vel.z).toBeCloseTo(-limit);
+    expect(vel.x).toBe(5);
+  });
+
+  it('bleeds off sideways speed right next to the anchor', () => {
+    const vel = v(20, 0, 0);
+    applySoftArrival(vel, v(0, 0, -1), 1.5, 1 / 120);
+    expect(vel.x).toBeLessThan(20);
+    expect(vel.x).toBeGreaterThan(15);
+  });
+
+  it('leaves slow or receding motion alone', () => {
+    const vel = v(0, 0, 3);
+    expect(applySoftArrival(vel, v(0, 0, -1), 1)).toBe(0);
+    expect(vel.z).toBe(3);
+  });
+});
+
+describe('slingshot release and gas recharge', () => {
+  it('gives no boost when slow and a capped boost when fast', () => {
+    expect(releaseBoostAmount(GRAPPLE.releaseBoostMin - 1)).toBe(0);
+    expect(releaseBoostAmount(GRAPPLE.releaseBoostMin + 10)).toBeCloseTo(10 * GRAPPLE.releaseBoostScale);
+    expect(releaseBoostAmount(500)).toBe(GRAPPLE.releaseBoostMax);
+  });
+
+  it('recharges only after a pause, and only up to the cap in the air', () => {
+    expect(regenGas(10, 0, false, 1)).toBe(10);
+    expect(regenGas(10, GRAPPLE.gasRegenDelay, false, 1)).toBeCloseTo(10 + GRAPPLE.gasRegen);
+    expect(regenGas(GRAPPLE.gasRegenCap, 5, false, 1)).toBe(GRAPPLE.gasRegenCap);
+    expect(regenGas(GRAPPLE.gasRegenCap + 10, 5, false, 1)).toBe(GRAPPLE.gasRegenCap + 10);
+  });
+
+  it('refills the whole tank while resting on the ground', () => {
+    let gas = 80;
+    for (let i = 0; i < 100; i++) gas = regenGas(gas, 5, true, 0.1);
+    expect(gas).toBe(GRAPPLE.gasMax);
   });
 });

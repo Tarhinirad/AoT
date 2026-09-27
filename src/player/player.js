@@ -3,15 +3,15 @@ import * as THREE from 'three';
 export const PLAYER_CONFIG = {
   radius: 0.45,
   gravity: 22,
-  walkSpeed: 9,
+  walkSpeed: 10,
   groundAccel: 70,
   groundSlideDecel: 22,
-  airSteerAccel: 12,
+  airSteerAccel: 13,
   jumpSpeed: 8.5,
   quadDrag: 0.0032, // terminal velocity around sqrt(g/k) ≈ 83 m/s
   maxSpeed: 90,
-  impactDamageSpeed: 38, // colliding faster than this into a surface hurts
-  impactDamageScale: 1.2,
+  impactDamageSpeed: 46, // colliding faster than this into a surface hurts
+  impactDamageScale: 0.9,
   maxHealth: 100,
 };
 
@@ -60,8 +60,9 @@ export class Player {
 
   /**
    * @param {number} dt
-   * @param {{wish: THREE.Vector3, jump: boolean, hooked: boolean}} intent
+   * @param {{wish: THREE.Vector3, jump: boolean, hooked: boolean, dragScale?: number}} intent
    *   wish: desired horizontal move direction (length 0..1, world space)
+   *   dragScale: multiplier on air drag (ropes lower it so swings keep momentum)
    */
   integrate(dt, intent) {
     const C = PLAYER_CONFIG;
@@ -103,7 +104,7 @@ export class Player {
     // Quadratic air drag
     const sp = v.length();
     if (sp > 0.001) {
-      const drag = Math.min(sp, C.quadDrag * sp * sp * dt);
+      const drag = Math.min(sp, C.quadDrag * (intent.dragScale ?? 1) * sp * sp * dt);
       v.multiplyScalar((sp - drag) / sp);
     }
     if (sp > C.maxSpeed) v.multiplyScalar(C.maxSpeed / sp);
