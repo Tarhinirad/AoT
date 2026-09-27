@@ -70,7 +70,7 @@ export function generateCity(seed = 1337) {
   for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2 + Math.PI / 8;
     buildings.push({
-      x: Math.cos(a) * 30, z: Math.sin(a) * 30, w: 3, d: 3, h: 22,
+      x: Math.cos(a) * 30, z: Math.sin(a) * 30, w: 1.8, d: 1.8, h: 14,
       roof: 'flat', roofH: 0, color: 0xd6ccb4, roofColor: 0xd6ccb4, pillar: true,
     });
   }

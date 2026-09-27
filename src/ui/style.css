@@ -44,3 +44,23 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color:
 .meter.gas.active .bar { box-shadow: 0 0 8px var(--gas); }
 .meter.gas.low label { color: var(--danger); animation: blink 0.6s infinite alternate; }
 @keyframes blink { from { opacity: 1; } to { opacity: 0.3; } }
+.fx-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.dmg-num { position: absolute; left: 0; top: 0; font-weight: 800; font-size: 22px; color: #fff; text-shadow: 0 2px 0 #000, 0 0 6px #000; white-space: nowrap; will-change: transform; }
+.dmg-num.nape { color: #ffd060; font-size: 30px; }
+.dmg-num.kill { color: #ff5a3c; font-size: 36px; }
+.dmg-num.limb { color: #ffb38a; }
+.dmg-num.weak { color: #aaa; font-size: 18px; }
+.kill-banner { position: absolute; left: 0; right: 0; top: 26%; text-align: center; pointer-events: none; opacity: 0; }
+.kill-banner .kb-main { font-size: 64px; font-weight: 900; letter-spacing: 12px; color: #ff5a3c; text-shadow: 0 4px 0 #3a0a04, 0 0 30px rgba(255, 60, 20, 0.6); }
+.kill-banner .kb-sub { font-size: 20px; letter-spacing: 4px; color: var(--accent); margin-top: 4px; text-shadow: 0 2px 0 #000; }
+.kill-banner.show { animation: killpop 1.6s ease-out forwards; }
+@keyframes killpop { 0% { opacity: 0; transform: scale(2.2); } 10% { opacity: 1; transform: scale(0.95); } 18% { transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; transform: translateY(-20px); } }
+.screen-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
+.screen-flash.show { animation: flash 0.35s ease-out; }
+@keyframes flash { from { opacity: 1; } to { opacity: 0; } }
+.toast { position: absolute; left: 50%; top: 62%; transform: translateX(-50%); padding: 6px 16px; background: rgba(0, 0, 0, 0.55); border-radius: 4px; font-size: 16px; letter-spacing: 2px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+.meter.blade .fill { background: linear-gradient(90deg, #8e9aa6, #e8f0f8); }
+.meter.blade.low label { color: var(--danger); }
+.meter .spares { margin-left: 8px; letter-spacing: 1px; color: #e8f0f8; }
+.meter .spares i { font-style: normal; opacity: 0.35; }
