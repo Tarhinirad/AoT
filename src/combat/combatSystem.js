@@ -82,6 +82,7 @@ export class CombatSystem {
       const durability = this.blades.durability;
       const damage = slashDamage(speed, durability, part);
       const broke = this.blades.strike(speed, part);
+      const oneCut = part === 'nape' && g.napeHP >= g.napeMax;
       const res = g.applyHit(best, damage, dir);
       const stop = hitStopDuration(damage, res.killed);
       this.events.push({
@@ -93,6 +94,7 @@ export class CombatSystem {
         severed: res.severed,
         point: best.world.clone(),
         hitStop: stop,
+        oneCut,
         broken: durability <= 0,
       });
       if (broke) this.events.push({ type: 'broken' });

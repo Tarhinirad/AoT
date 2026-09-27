@@ -112,14 +112,15 @@ export function generateCity(seed = 1337) {
   const depots = [{ x: 0, z: 30 }];
   for (const sq of squares.slice(0, 3)) depots.push({ x: sq.x, z: sq.z });
 
-  // Giant spawn points: the breach, and deep in the forest.
+  // Giant spawn points: just inside the breach, and deep in the forest.
   const spawns = [
-    { x: 0, z: HALF + 30, kind: 'breach' },
-    { x: -8, z: HALF + 45, kind: 'breach' },
-    { x: 10, z: HALF + 50, kind: 'breach' },
-    { x: -150, z: -210, kind: 'forest' },
-    { x: 0, z: -215, kind: 'forest' },
-    { x: 150, z: -210, kind: 'forest' },
+    { x: 0, z: HALF - 8, kind: 'breach' },
+    { x: -12, z: HALF - 14, kind: 'breach' },
+    { x: 12, z: HALF - 14, kind: 'breach' },
+    { x: -160, z: -205, kind: 'forest' },
+    { x: -60, z: -212, kind: 'forest' },
+    { x: 60, z: -212, kind: 'forest' },
+    { x: 160, z: -205, kind: 'forest' },
   ];
 
   return { buildings, trees, outerTrees, wall, rubble, depots, spawns, squares, half: HALF };

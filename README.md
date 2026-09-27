@@ -26,3 +26,7 @@ _Work in progress. Full docs are added in M7._
 - **Grab escape:** a grab deals 35 damage plus 4/s crush. Mash Space (a slash counts double) to break free before the 5 s bite (30 damage). Escaping grants 2.5 s of grab immunity.
 - **Line of sight** is a throttled ray from the head (4 per second). Abnormals ignore it, and anything within 22 m is always "heard".
 - **Steering** is probe-ray obstacle avoidance (a fan of headings around the goal) plus a stuck detector that forces a detour. There's no navmesh.
+- **Ten waves, then victory.** Each wave grows in size and mix: large giants from wave 3, abnormals from wave 4. At most 7 giants are alive at once, and the rest trickle in every 2.5–5 s from the wall breach or the forest (whichever spawn points are more than 90 m from the player).
+- **Healing:** supply depots also restore 35 HP, and clearing a wave restores 25 HP. Without this a 10-wave run would be decided by attrition rather than skill.
+- **Scoring:** a kill scores the variant's base value plus a speed bonus (8 points per m/s above 20), plus style bonuses: AIRBORNE (≥ 4 s off the ground), ONE CUT, and CLOSE CALL (≤ 25 HP). Kills within 10 s of each other chain a combo multiplier (+0.25 each, capped at ×3). Wave clears add 250 × wave number plus a time bonus. Severs and escapes add small bonuses. The best score is kept in `localStorage`.
+- **Resupply:** stand still on a depot platform for 1.2 s. There's no cooldown, since landing already costs you momentum.

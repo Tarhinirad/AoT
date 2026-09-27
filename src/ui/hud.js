@@ -10,6 +10,11 @@ export class Hud {
         <div class="meter blade"><label>BLADES <span class="spares"></span></label><div class="bar"><div class="fill"></div></div></div>
       </div>`;
     this.root.insertAdjacentHTML('beforeend', `
+      <div class="hud-top"><div class="wave-label"></div><div class="wave-sub"></div></div>
+      <div class="hud-top-right"><div class="minimap-slot"></div><div class="score"></div><div class="combo"></div></div>
+      <div class="hud-bottom-right"><div class="speed"><b>0</b> m/s</div></div>
+      <div class="announce"><div class="an-main"></div><div class="an-sub"></div></div>
+      <div class="resupply"><div class="resupply-label">RESUPPLYING</div><div class="bar"><div class="fill"></div></div></div>
       <div class="danger"><div class="danger-arrow"></div><div class="danger-label"></div></div>
       <div class="struggle"><div class="struggle-label">STRUGGLE!</div><div class="bar"><div class="fill"></div></div></div>`);
     parent.appendChild(this.root);
@@ -19,6 +24,16 @@ export class Hud {
     this.struggleEl = this.root.querySelector('.struggle');
     this.struggleFill = this.root.querySelector('.struggle .fill');
     this.struggleLabel = this.root.querySelector('.struggle-label');
+    this.waveLabel = this.root.querySelector('.wave-label');
+    this.waveSub = this.root.querySelector('.wave-sub');
+    this.scoreEl = this.root.querySelector('.score');
+    this.comboEl = this.root.querySelector('.combo');
+    this.speedEl = this.root.querySelector('.speed b');
+    this.minimapSlot = this.root.querySelector('.minimap-slot');
+    this.announceEl = this.root.querySelector('.announce');
+    this.resupplyEl = this.root.querySelector('.resupply');
+    this.resupplyFill = this.root.querySelector('.resupply .fill');
+    this._announceT = 0;
     this.healthFill = this.root.querySelector('.health .fill');
     this.gasFill = this.root.querySelector('.gas .fill');
     this.gasMeter = this.root.querySelector('.meter.gas');
@@ -32,6 +47,23 @@ export class Hud {
     if (this._cache[key] === value) return;
     this._cache[key] = value;
     fn(value);
+  }
+
+  /** Big centered announcement (wave start/clear). */
+  announce(main, sub = '', dur = 2.6) {
+    this.announceEl.querySelector('.an-main').textContent = main;
+    this.announceEl.querySelector('.an-sub').textContent = sub;
+    this.announceEl.classList.remove('show');
+    void this.announceEl.offsetWidth;
+    this.announceEl.classList.add('show');
+    this._announceT = dur;
+  }
+
+  tick(dt) {
+    if (this._announceT > 0) {
+      this._announceT -= dt;
+      if (this._announceT <= 0) this.announceEl.classList.remove('show');
+    }
   }
 
   setVisible(v) {
@@ -58,6 +90,16 @@ export class Hud {
       this._set('strugglePct', Math.round(state.struggle.pct * 100), (v) => (this.struggleFill.style.width = v + '%'));
       this._set('struggleKey', state.struggle.key, (v) => (this.struggleLabel.textContent = `STRUGGLE! Mash ${v}`));
     }
+    this._set('wave', state.waveText, (v) => (this.waveLabel.textContent = v || ''));
+    this._set('waveSub', state.waveSub, (v) => (this.waveSub.textContent = v || ''));
+    this._set('score', state.score, (v) => (this.scoreEl.textContent = (v || 0).toLocaleString()));
+    this._set('combo', state.combo, (v) => {
+      this.comboEl.textContent = v > 1 ? `COMBO x${v}` : '';
+      this.comboEl.classList.toggle('hot', v > 1);
+    });
+    this._set('speed', Math.round(state.speed || 0), (v) => (this.speedEl.textContent = v));
+    this._set('resupply', state.resupply > 0, (v) => this.resupplyEl.classList.toggle('show', v));
+    if (state.resupply > 0) this._set('resupplyPct', Math.round(state.resupply * 100), (v) => (this.resupplyFill.style.width = v + '%'));
     this._set('spares', state.spares, (v) => (this.sparesEl.innerHTML = '▮'.repeat(v) + '<i>' + '▯'.repeat(Math.max(0, 4 - v)) + '</i>'));
   }
 }
