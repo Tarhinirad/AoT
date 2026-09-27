@@ -8,11 +8,20 @@ import { WorldView } from '../world/worldView.js';
 import { Player } from '../player/player.js';
 import { PlayerView } from '../player/playerView.js';
 import { CameraRig } from '../player/cameraRig.js';
+import { GrappleSystem } from '../grapple/grappleSystem.js';
+import { GrappleView } from '../grapple/grappleView.js';
+import { GRAPPLE } from '../grapple/ropeMath.js';
+import { SpeedLines } from '../fx/speedLines.js';
+import { Hud } from '../ui/hud.js';
 
 const SPAWN = new THREE.Vector3(0, 3, 40);
 const tmpF = new THREE.Vector3();
 const tmpR = new THREE.Vector3();
 const renderPos = new THREE.Vector3();
+const aimHit = { dist: 0, point: null, normal: null, collider: null, attach: null };
+const aimDir = new THREE.Vector3();
+const aimUp = new THREE.Vector3();
+const AIM_ASSIST_ANGLES = [0.035, 0.07];
 
 export class Game {
   constructor(container) {
@@ -38,6 +47,23 @@ export class Game {
     this.playerView = new PlayerView(this.scene);
     this.cameraRig = new CameraRig(this.camera);
     this.cameraRig.yaw = 0;
+    this.grapple = new GrappleSystem();
+    this.grappleView = new GrappleView(this.scene);
+
+    this.overlay = document.createElement('div');
+    this.overlay.className = 'overlay';
+    container.appendChild(this.overlay);
+    this.speedLines = new SpeedLines(this.overlay);
+    this.hud = new Hud(this.overlay);
+    this.hudState = { health: 100, maxHealth: 100, gas: 100, gasMax: 100, boosting: false };
+    this.crosshair = document.createElement('div');
+    this.crosshair.className = 'crosshair';
+    this.crosshair.innerHTML = '<div class="ring"></div>';
+    this.overlay.appendChild(this.crosshair);
+    this.aim = { point: new THREE.Vector3(), inRange: false, giant: false };
+    this.pendingFire = [false, false];
+    this.controls = { reel: [false, false], boost: false, look: new THREE.Vector3(0, 0, -1) };
+    this.raycastHookable = (ox, oy, oz, dx, dy, dz, max, out) => this.raycastHookTargets(ox, oy, oz, dx, dy, dz, max, out);
 
     this.input = new Input(this.renderer.domElement, this.settings);
     this.state = 'menu';
@@ -106,16 +132,103 @@ export class Game {
     const w = this.intent.wish.set(0, 0, 0).addScaledVector(tmpF, f).addScaledVector(tmpR, r);
     if (w.lengthSq() > 1) w.normalize();
     this.intent.jump = inp.isDown('boost');
+    if (!this.player.grounded) w.y = 0;
+
+    this.updateAim();
+    if (inp.pressed('hookLeft')) this.pendingFire[0] = true;
+    if (inp.pressed('hookRight')) this.pendingFire[1] = true;
+    if (inp.pressed('release')) this.grapple.releaseAll();
+    this.controls.reel[0] = inp.isDown('hookLeft');
+    this.controls.reel[1] = inp.isDown('hookRight');
+    this.controls.boost = inp.isDown('boost');
+    this.controls.look.copy(this.cameraRig.forward);
+  }
+
+  /** Static world + (later) giants: anything a hook can bite into. */
+  raycastHookTargets(ox, oy, oz, dx, dy, dz, max, out) {
+    out.attach = null;
+    return this.colliders.raycast(ox, oy, oz, dx, dy, dz, max, out, (c) => c.hookable);
+  }
+
+  /**
+   * Raycast along the crosshair to find what the hooks would hit. If the
+   * center ray misses, a small cone of probe rays gives gentle aim assist.
+   */
+  updateAim() {
+    const cam = this.camera.position;
+    const f = this.cameraRig.forward;
+    const p = this.player.pos;
+    // Start the ray level with the player so we never hook things behind them.
+    const along = Math.max(0, (p.x - cam.x) * f.x + (p.y - cam.y) * f.y + (p.z - cam.z) * f.z);
+    const ox = cam.x + f.x * along, oy = cam.y + f.y * along, oz = cam.z + f.z * along;
+    const range = GRAPPLE.maxRange;
+    const aim = this.aim;
+    aim.inRange = false;
+    aim.giant = false;
+    aim.point.set(ox + f.x * range, oy + f.y * range, oz + f.z * range);
+    if (this._aimProbe(ox, oy, oz, f.x, f.y, f.z, range)) {
+      /* direct hit */
+    } else {
+      const r = this.cameraRig.right;
+      const u = aimUp.crossVectors(r, f).normalize();
+      outer: for (const ang of AIM_ASSIST_ANGLES) {
+        const t = Math.tan(ang);
+        for (let k = 0; k < 8; k++) {
+          const a = (k / 8) * Math.PI * 2;
+          const ca = Math.cos(a) * t, sa = Math.sin(a) * t;
+          aimDir.set(f.x + r.x * ca + u.x * sa, f.y + r.y * ca + u.y * sa, f.z + r.z * ca + u.z * sa).normalize();
+          if (this._aimProbe(ox, oy, oz, aimDir.x, aimDir.y, aimDir.z, range)) break outer;
+        }
+      }
+    }
+    this.crosshair.classList.toggle('in-range', aim.inRange);
+    this.crosshair.classList.toggle('giant', aim.inRange && aim.giant);
+  }
+
+  _aimProbe(ox, oy, oz, dx, dy, dz, range) {
+    if (!this.raycastHookTargets(ox, oy, oz, dx, dy, dz, range + 20, aimHit)) return false;
+    if (aimHit.collider?.tag === 'ground' && aimHit.dist > 40) return false;
+    const pt = aimHit.point;
+    const p = this.player.pos;
+    if (Math.hypot(pt.x - p.x, pt.y - p.y, pt.z - p.z) > GRAPPLE.maxRange) return false;
+    this.aim.point.set(pt.x, pt.y, pt.z);
+    this.aim.inRange = true;
+    this.aim.giant = !!aimHit.attach;
+    return true;
+  }
+
+  /** Debug helper: point the camera at a world position. */
+  debugLookAt(x, y, z) {
+    const p = this.player.pos;
+    const dx = x - p.x, dy = y - p.y, dz = z - p.z;
+    this.cameraRig.yaw = Math.atan2(-dx, -dz);
+    this.cameraRig.pitch = Math.atan2(dy, Math.hypot(dx, dz));
   }
 
   fixedUpdate(dt, firstStep) {
     if (this.state !== 'playing') return;
     this.time += dt;
     const p = this.player;
-    this.intent.hooked = false;
+    const g = this.grapple;
+    g.updateOrigins(p.pos, this.cameraRig.right);
+    for (let i = 0; i < 2; i++) {
+      if (this.pendingFire[i]) {
+        this.pendingFire[i] = false;
+        g.fire(i, this.aim.point);
+      }
+    }
+    g.step(dt, p, this.controls, this.raycastHookable);
+    this.intent.hooked = g.attachedCount > 0;
+    this.intent.jump = this.controls.boost && p.grounded && !this.intent.hooked;
     p.integrate(dt, this.intent);
+    g.constrain(p);
     p.collide(this.colliders, dt);
-    p.pendingImpact = 0;
+    if (p.pendingImpact > 0) {
+      p.damage(p.pendingImpact);
+      this.cameraRig.addShake(Math.min(0.8, p.pendingImpact * 0.05));
+      p.pendingImpact = 0;
+    }
+    g.events.length = 0;
   }
 
   preFrame() {
@@ -126,8 +239,18 @@ export class Game {
     this.input.endFrame();
     const p = this.player;
     renderPos.lerpVectors(p.prevPos, p.pos, alpha);
-    this.playerView.update(frameDt, renderPos, p, this.cameraRig.yaw, false);
+    this.playerView.update(frameDt, renderPos, p, this.cameraRig.yaw, this.grapple.attachedCount > 0);
     this.cameraRig.update(frameDt, renderPos, p.speed, this.colliders, this.settings.fovEffects);
+    this.grapple.updateOrigins(renderPos, this.cameraRig.right);
+    this.grappleView.update(this.grapple, this.grapple.origins);
+    this.speedLines.update(frameDt, p.speed, this.settings.speedLines);
+    const hs = this.hudState;
+    hs.health = p.health;
+    hs.maxHealth = p.maxHealth;
+    hs.gas = this.grapple.gas;
+    hs.gasMax = this.grapple.gasMax;
+    hs.boosting = this.grapple.boosting;
+    this.hud.update(hs);
     this.worldView.update(renderPos, this.time);
     this.renderer.render(this.scene, this.camera);
   }

@@ -10,8 +10,8 @@ export const PLAYER_CONFIG = {
   jumpSpeed: 8.5,
   quadDrag: 0.0032, // terminal velocity around sqrt(g/k) ≈ 83 m/s
   maxSpeed: 90,
-  impactDamageSpeed: 34, // colliding faster than this into a surface hurts
-  impactDamageScale: 1.4,
+  impactDamageSpeed: 38, // colliding faster than this into a surface hurts
+  impactDamageScale: 1.2,
   maxHealth: 100,
 };
 
