@@ -14,6 +14,7 @@ export const COMBAT = {
   spares: 4,
   slashCooldown: 0.32,
   slashWindow: 0.14,
+  slashHoldMax: 0.45, // holding the key keeps the blades out this long
   slashRadius: 2.3,
   hitStopBase: 0.05,
 };

@@ -119,10 +119,12 @@ export class GiantManager {
         best = rayOut.dist;
         hit = true;
         out.dist = rayOut.dist;
-        out.point = { ...rayOut.point };
-        out.normal = { ...rayOut.normal };
+        out.point = out.point || { x: 0, y: 0, z: 0 };
+        out.normal = out.normal || { x: 0, y: 0, z: 0 };
+        out.point.x = rayOut.point.x; out.point.y = rayOut.point.y; out.point.z = rayOut.point.z;
+        out.normal.x = rayOut.normal.x; out.normal.y = rayOut.normal.y; out.normal.z = rayOut.normal.z;
         out.collider = rayOut.collider;
-        out.attach = rayOut.attach;
+        out.attach = null;
       }
     }
     return hit;

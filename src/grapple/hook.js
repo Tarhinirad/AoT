@@ -61,7 +61,7 @@ export class Hook {
         this.normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
         this.tip.copy(this.anchor);
         this.collider = hit.collider;
-        this.attach = hit.attach || null;
+        this.attach = hit.collider?.giant ? hit.collider.giant.makeAttach(hit.collider.hitbox, hit.point) : null;
         this.state = 'attached';
         this.justAttached = true;
         this.length = origin.distanceTo(this.anchor);

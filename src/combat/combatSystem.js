@@ -5,6 +5,8 @@ import { COMBAT, slashDamage, hitStopDuration } from './damage.js';
 const center = new THREE.Vector3();
 const dir = new THREE.Vector3();
 const toHb = new THREE.Vector3();
+const ahead = new THREE.Vector3();
+const NAPE_LOOKAHEAD = 0.08; // seconds
 
 /**
  * Slash handling: a short active window after pressing slash during which a
@@ -16,6 +18,8 @@ export class CombatSystem {
     this.blades = new Blades();
     this.cooldown = 0;
     this.window = 0;
+    this.windowAge = 0;
+    this.held = false; // slash key still held: keeps the window open (up to slashHoldMax)
     this.hitThisSlash = new Set();
     this.events = []; // {type:'slash'|'hit'|'kill'|'sever'|'broken'|'swap'|'noSpares'|'dullHit', ...}
     this.slashCenter = new THREE.Vector3();
@@ -31,6 +35,7 @@ export class CombatSystem {
     if (this.cooldown > 0) return false;
     this.cooldown = COMBAT.slashCooldown;
     this.window = COMBAT.slashWindow;
+    this.windowAge = 0;
     this.hitThisSlash.clear();
     this.events.push({ type: 'slash', broken: this.blades.broken });
     return true;
@@ -49,7 +54,10 @@ export class CombatSystem {
   step(dt, player, lookDir, giants) {
     if (this.cooldown > 0) this.cooldown -= dt;
     if (this.window <= 0) return;
-    this.window -= dt;
+    this.windowAge += dt;
+    if (!(this.held && this.windowAge < COMBAT.slashHoldMax)) this.window -= dt;
+    // A held slash keeps the cooldown from ticking so it can't be spammed.
+    if (this.held && this.windowAge < COMBAT.slashHoldMax) this.cooldown = Math.max(this.cooldown, COMBAT.slashCooldown * 0.5);
     const speed = player.speed;
     if (speed > 4) dir.copy(player.vel).divideScalar(speed);
     else dir.copy(lookDir);
@@ -77,7 +85,14 @@ export class CombatSystem {
         }
       }
       if (!best) continue;
+      // If we're about to reach the nape, don't waste the swing on a limb/body part.
+      if (best.kind !== 'nape' && this.window > dt) {
+        const nape = g.rig.hitboxes[0];
+        ahead.copy(center).addScaledVector(player.vel, NAPE_LOOKAHEAD);
+        if (g.hitboxActive(nape) && ahead.distanceTo(nape.world) - nape.radius <= R) continue;
+      }
       this.hitThisSlash.add(g);
+      this.window = Math.min(this.window, 0.03); // the swing connects: close the window shortly after
       const part = best.kind;
       const durability = this.blades.durability;
       const damage = slashDamage(speed, durability, part);

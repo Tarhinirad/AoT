@@ -34,8 +34,13 @@ export class SpeedLines {
     this.intensity += (target - this.intensity) * Math.min(1, dt * 6);
     const { ctx, canvas } = this;
     const w = canvas.width, h = canvas.height;
+    if (this.intensity < 0.02) {
+      if (this.drawn) ctx.clearRect(0, 0, w, h);
+      this.drawn = false;
+      return;
+    }
     ctx.clearRect(0, 0, w, h);
-    if (this.intensity < 0.02) return;
+    this.drawn = true;
     const cx = w / 2, cy = h / 2, R = Math.hypot(cx, cy);
     ctx.strokeStyle = '#ffffff';
     ctx.lineCap = 'round';

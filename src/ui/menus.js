@@ -83,6 +83,7 @@ export class Menus {
       <div class="setting check"><label><input type="checkbox" class="invert"> Invert mouse Y</label></div>
       <div class="setting"><label>Graphics quality</label>
         <select class="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
+      <div class="setting check"><label><input type="checkbox" class="dynres"> Dynamic resolution (holds 60 fps)</label></div>
       <div class="setting check"><label><input type="checkbox" class="fov"> Widen FOV with speed</label></div>
       <div class="setting check"><label><input type="checkbox" class="lines"> Speed lines</label></div>
       <div class="setting"><label>Volume <span class="val vol-val"></span></label><input type="range" class="vol" min="0" max="1" step="0.05"></div>
@@ -138,6 +139,10 @@ export class Menus {
     });
     q('.quality').addEventListener('change', (e) => {
       s.quality = e.target.value;
+      changed(true);
+    });
+    q('.dynres').addEventListener('change', (e) => {
+      s.dynamicRes = e.target.checked;
       changed(true);
     });
     q('.fov').addEventListener('change', (e) => {
@@ -210,6 +215,7 @@ export class Menus {
     el.querySelector('.invert').checked = s.invertY;
     el.querySelector('.quality').value = s.quality;
     el.querySelector('.fov').checked = s.fovEffects;
+    el.querySelector('.dynres').checked = s.dynamicRes;
     el.querySelector('.lines').checked = s.speedLines;
     el.querySelector('.vol').value = s.volume;
     el.querySelector('.vol-val').textContent = Math.round(s.volume * 100) + '%';

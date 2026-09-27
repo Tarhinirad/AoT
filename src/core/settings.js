@@ -37,6 +37,7 @@ export const DEFAULT_SETTINGS = {
   fovEffects: true,
   speedLines: true,
   volume: 0.7,
+  dynamicRes: true,
   bindings: { ...DEFAULT_BINDINGS },
 };
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /**
  * Procedural low-poly giant. All dimensions are fractions of the giant's
@@ -77,6 +78,7 @@ export function buildGiantRig(H, rng, abnormal = false) {
   mesh(G.limb, skin, neck, 0.075, -0.07, 0.075, 0, 0, 0);
   // Weak point marker on the back of the neck.
   const napeMark = mesh(G.sphere, G.napeMat, neck, 0.05, 0.035, 0.02, 0, 0.035, -0.036);
+  napeMark.userData.keep = true; // hidden on death, so never merged
   const head = mk('head', neck, 0, 0.07 + headS * 0.45, 0.005);
   mesh(G.head, skin, head, headS * 0.9, headS, headS * 0.95);
   // Face: eyes, grin, nose, ears
@@ -148,7 +150,49 @@ export function buildGiantRig(H, rng, abnormal = false) {
   }
   for (const hb of hitboxes) hb.world = new THREE.Vector3();
 
-  return { root, bones, arms, legs, hitboxes, skin, skinColor, napeMark, hipH, H };
+  const geometries = mergeStaticParts(root);
+
+  return {
+    geometries, root, bones, arms, legs, hitboxes, skin, skinColor, napeMark, hipH, H };
+}
+
+/**
+ * Draw-call reduction: within each bone group, merge the direct child meshes
+ * that share a material into a single mesh (baking their local transforms).
+ * Returns the created geometries so the giant can dispose them.
+ */
+function mergeStaticParts(root) {
+  const created = [];
+  const groups = [];
+  root.traverse((o) => {
+    if (o.isGroup || o === root) groups.push(o);
+  });
+  for (const g of groups) {
+    const byMat = new Map();
+    for (const c of g.children) {
+      if (!c.isMesh || c.userData.keep) continue;
+      if (!byMat.has(c.material)) byMat.set(c.material, []);
+      byMat.get(c.material).push(c);
+    }
+    for (const [mat, meshes] of byMat) {
+      if (meshes.length < 2) continue;
+      const geos = meshes.map((m) => {
+        m.updateMatrix();
+        const src = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+        for (const k of Object.keys(src.attributes)) if (k !== 'position' && k !== 'normal') src.deleteAttribute(k);
+        return src.applyMatrix4(m.matrix);
+      });
+      const merged = mergeGeometries(geos, false);
+      for (const gg of geos) gg.dispose();
+      if (!merged) continue;
+      for (const m of meshes) g.remove(m);
+      const mesh = new THREE.Mesh(merged, mat);
+      mesh.castShadow = true;
+      g.add(mesh);
+      created.push(merged);
+    }
+  }
+  return created;
 }
 
 /**

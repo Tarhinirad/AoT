@@ -187,15 +187,21 @@ export class Giant {
     const w = bestHb.world;
     const l = Math.hypot(px - w.x, py - w.y, pz - w.z) || 1;
     out.normal.x = (px - w.x) / l; out.normal.y = (py - w.y) / l; out.normal.z = (pz - w.z) / l;
-    out.collider = { tag: 'giant', giant: this, hitbox: bestHb };
-    const local = bestHb.bone.worldToLocal(new THREE.Vector3(px, py, pz));
-    const giant = this, hb = bestHb;
-    out.attach = {
+    if (!bestHb.colliderRef) bestHb.colliderRef = { tag: 'giant', giant: this, hitbox: bestHb };
+    out.collider = bestHb.colliderRef;
+    out.attach = null; // built lazily by makeAttach() when a hook actually bites
+    return true;
+  }
+
+  /** Anchor that follows a body part as the giant moves (used by hooks). */
+  makeAttach(hb, point) {
+    const local = hb.bone.worldToLocal(new THREE.Vector3(point.x, point.y, point.z));
+    const giant = this;
+    return {
       giant,
       valid: () => giant.hitboxActive(hb),
       worldPoint: (o) => o.copy(local).applyMatrix4(hb.bone.matrixWorld),
     };
-    return true;
   }
 
   /**
@@ -299,5 +305,6 @@ export class Giant {
   dispose() {
     this.scene.remove(this.root);
     this.rig.skin.dispose();
+    for (const g of this.rig.geometries) g.dispose();
   }
 }

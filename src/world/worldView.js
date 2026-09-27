@@ -145,6 +145,12 @@ export class WorldView {
     this.scene.add(sun.target);
     this.sun = sun;
     this.sunOffset = new THREE.Vector3(90, 140, 60);
+    // Light-space basis used to snap the shadow frustum to whole texels.
+    this.lightDir = this.sunOffset.clone().normalize();
+    this.lightRight = new THREE.Vector3().crossVectors(UP, this.lightDir).normalize();
+    this.lightUp = new THREE.Vector3().crossVectors(this.lightDir, this.lightRight).normalize();
+    this.shadowTexel = 180 / 1024;
+    this._snap = new THREE.Vector3();
   }
 
   _buildGround() {
@@ -332,6 +338,7 @@ export class WorldView {
   applyQuality(q) {
     this.sun.castShadow = !!q.shadows;
     if (q.shadows) {
+      this.shadowTexel = 180 / q.shadowSize;
       this.sun.shadow.mapSize.set(q.shadowSize, q.shadowSize);
       if (this.sun.shadow.map) {
         this.sun.shadow.map.dispose();
@@ -340,10 +347,15 @@ export class WorldView {
     }
   }
 
-  /** Keep the shadow frustum centered on the player. */
+  /** Keep the shadow frustum centered on the player, snapped to texels to avoid shimmer. */
   update(focus, time) {
-    this.sun.target.position.copy(focus);
-    this.sun.position.copy(focus).add(this.sunOffset);
+    const t = this.shadowTexel;
+    const r = Math.round(focus.dot(this.lightRight) / t) * t;
+    const u = Math.round(focus.dot(this.lightUp) / t) * t;
+    const f = focus.dot(this.lightDir);
+    const snap = this._snap.copy(this.lightRight).multiplyScalar(r).addScaledVector(this.lightUp, u).addScaledVector(this.lightDir, f);
+    this.sun.target.position.copy(snap);
+    this.sun.position.copy(snap).add(this.sunOffset);
     for (const b of this.depotBeacons) b.material.opacity = 0.16 + Math.sin(time * 2.5) * 0.06;
   }
 }

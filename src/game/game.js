@@ -20,20 +20,25 @@ import { GiantBrain } from '../giants/ai.js';
 import { GRAB_ESCAPE, escapeRequired, struggle } from '../giants/aiStateMachine.js';
 import { SpeedLines } from '../fx/speedLines.js';
 import { Particles } from '../fx/particles.js';
+import { SlashTrail } from '../fx/slashTrail.js';
 import { Hud } from '../ui/hud.js';
 import { Minimap } from '../ui/minimap.js';
 import { Menus, loadBest, saveBest } from '../ui/menus.js';
 import { WaveDirector, WAVES } from './waves.js';
+import { AudioEngine } from '../audio/audio.js';
+import { PerfMonitor } from '../core/perf.js';
 import { ScoreKeeper, waveClearBonus } from './score.js';
 
 const SPAWN = new THREE.Vector3(0, 3, 40);
 const tmpF = new THREE.Vector3();
 const tmpR = new THREE.Vector3();
 const tmpV = new THREE.Vector3();
+const tmpB = new THREE.Vector3();
 const renderPos = new THREE.Vector3();
 const PART_LABEL = { nape: 'nape', limb: 'limb', head: 'weak', body: 'weak' };
 const DEPOT_HEAL = 35;
 const INTERMISSION_HEAL = 25;
+const DUST_COLORS = { building: 0xc9bca2, spire: 0xc9bca2, wall: 0xb5ad9e, tree: 0x6b5238, canopy: 0x4f7a3f, ground: 0xa89c86, depot: 0x8a7457, rubble: 0xa39c8e, giant: 0xc0392b };
 
 /**
  * Top-level orchestrator. Owns the renderer, world, player, systems and UI,
@@ -74,6 +79,8 @@ export class Game {
     this.giants = new GiantManager(this.scene, this.colliders, this.rng);
     this.giants.brainFactory = (g) => new GiantBrain(g, this.rng, this.colliders);
     this.particles = new Particles(this.scene, this.quality.particles);
+    this.slashTrail = new SlashTrail(this.scene);
+    this.slowmoT = 0;
     this.waves = new WaveDirector(this.rng);
     this.score = new ScoreKeeper();
     this.raycastHookable = (ox, oy, oz, dx, dy, dz, max, out) => this.raycastHookTargets(ox, oy, oz, dx, dy, dz, max, out);
@@ -83,6 +90,8 @@ export class Game {
     this.overlay = document.createElement('div');
     this.overlay.className = 'overlay';
     container.appendChild(this.overlay);
+    this.overlay.insertAdjacentHTML('beforeend', '<div class="vignette"></div><div class="hurt-vignette"></div>');
+    this.hurtVignette = this.overlay.querySelector('.hurt-vignette');
     this.speedLines = new SpeedLines(this.overlay);
     this.feedback = new Feedback(this.overlay);
     this.hud = new Hud(this.overlay);
@@ -103,6 +112,31 @@ export class Game {
       onSettingsChanged: (q) => this.onSettingsChanged(q),
     });
     this.input.onLockChange = (locked) => this.onLockChange(locked);
+
+    // Audio starts on the first user gesture (autoplay policy).
+    this.audio = new AudioEngine();
+    this.audio.volume = this.settings.volume;
+    const unlockAudio = () => this.audio.init();
+    window.addEventListener('pointerdown', unlockAudio);
+    window.addEventListener('keydown', unlockAudio);
+    this.menus.root.addEventListener('click', (e) => {
+      if (e.target.closest('.btn, .key')) this.audio.click();
+    });
+
+    this.perf = new PerfMonitor(this.overlay, this.renderer);
+    this.perf.onRatio = (r) => {
+      this.renderer.setPixelRatio(r);
+      this.resize();
+    };
+    if (this.debug.has('fps')) this.perf.toggle();
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'F3') {
+        e.preventDefault();
+        this.perf.toggle();
+      }
+    });
+    this.wasGrounded = true;
+    this.steamT = 0;
 
     // Run state
     this.state = 'menu';
@@ -156,6 +190,7 @@ export class Game {
   }
 
   startRun() {
+    this.audio.init();
     this.giants.clear();
     this.player.reset(SPAWN);
     this.player.grabImmunity = 0;
@@ -168,6 +203,7 @@ export class Game {
     this.endT = 0;
     this.time = 0;
     this.hitStopT = 0;
+    this.slowmoT = 0;
     this.loop.timeScale = 1;
     this.cameraRig.yaw = 0;
     this.cameraRig.pitch = -0.1;
@@ -182,6 +218,7 @@ export class Game {
   pause() {
     if (this.state !== 'playing') return;
     this.state = 'paused';
+    this.audio.update(0, false, false, false);
     this.menus.show('pause');
     this.input.exitLock();
   }
@@ -230,11 +267,17 @@ export class Game {
 
   onSettingsChanged(qualityChanged) {
     if (qualityChanged) this.applyQuality();
+    this.audio.setVolume(this.settings.volume);
   }
 
   applyQuality() {
     this.quality = QUALITY_PRESETS[this.settings.quality] || QUALITY_PRESETS.medium;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.quality.pixelRatio));
+    const ratio = Math.min(window.devicePixelRatio || 1, this.quality.pixelRatio);
+    this.renderer.setPixelRatio(ratio);
+    if (this.perf) {
+      this.perf.dynamic = this.settings.dynamicRes;
+      this.perf.setMax(ratio);
+    }
     this.renderer.shadowMap.enabled = this.quality.shadows;
     this.scene.fog.far = this.quality.fogFar;
     this.worldView.applyQuality(this.quality);
@@ -306,6 +349,7 @@ export class Game {
       else this.pendingSlash = true;
     }
     if (grabbed && inp.pressed('struggle')) this.pendingStruggle += 1;
+    this.combat.held = inp.isDown('slash');
     if (inp.pressed('swap')) this.combat.trySwap();
     this.controls.reel[0] = inp.isDown('hookLeft');
     this.controls.reel[1] = inp.isDown('hookRight');
@@ -317,7 +361,10 @@ export class Game {
     // Hit-stop runs on real time so the freeze length is frame-rate independent.
     if (this.hitStopT > 0) {
       this.hitStopT -= realDt;
-      this.loop.timeScale = this.hitStopT > 0 ? 0.03 : 1;
+      this.loop.timeScale = this.hitStopT > 0 ? 0.03 : this.slowmoT > 0 ? 0.35 : 1;
+    } else if (this.slowmoT > 0) {
+      this.slowmoT -= realDt;
+      this.loop.timeScale = this.slowmoT > 0 ? 0.35 : 1;
     }
     if (this.state === 'playing') {
       // Browsers usually exit pointer lock on Esc (→ onLockChange → pause); handle the key too.
@@ -358,7 +405,10 @@ export class Game {
       }
       if (this.pendingSlash) {
         this.pendingSlash = false;
-        if (this.combat.trySlash()) this.playerView.triggerSlash();
+        if (this.combat.trySlash()) {
+          this.playerView.triggerSlash();
+          this.slashTrail.trigger(p.pos, p.speed > 4 ? p.vel : this.cameraRig.forward, false);
+        }
       }
     }
 
@@ -374,6 +424,13 @@ export class Game {
       g.constrain(p);
       p.collide(this.colliders, dt);
       this.giants.resolvePlayer(p);
+      if (p.grounded && !this.wasGrounded && p.lastImpactSpeed > 9) {
+        this.audio.land(p.lastImpactSpeed);
+        this.particles.emit(tmpV.set(p.pos.x, p.pos.y - 0.4, p.pos.z), Math.min(20, Math.round(p.lastImpactSpeed / 2)), {
+          color: 0xb3a58c, speed: 3 + p.lastImpactSpeed * 0.1, spread: 1, size: 0.6, grow: 1.5, life: 0.7, gravity: 1, drag: 3, alpha: 0.5,
+        });
+      }
+      this.wasGrounded = p.grounded;
     }
 
     this.giants.step(dt, { player: p, game: this });
@@ -392,6 +449,7 @@ export class Game {
 
     if (p.pendingImpact > 0) {
       p.damage(p.pendingImpact);
+      this.audio.hurt();
       this.cameraRig.addShake(Math.min(0.8, p.pendingImpact * 0.05));
       this.feedback.screenFlash('rgba(200,40,20,0.3)');
       p.pendingImpact = 0;
@@ -424,6 +482,7 @@ export class Game {
   onWaveEvent(e) {
     if (e.type === 'waveStart') {
       this.hud.announce(`WAVE ${e.wave}`, `${e.count} giants approaching`);
+      this.audio.bell();
     } else if (e.type === 'waveCleared') {
       const bonus = waveClearBonus(e.wave, e.time);
       this.score.addBonus('WAVE CLEAR', bonus);
@@ -431,6 +490,7 @@ export class Game {
       if (e.wave < WAVES.total) this.hud.announce('WAVE CLEARED', `+${bonus.toLocaleString()} · next wave in ${WAVES.intermission}s`);
     } else if (e.type === 'victory') {
       this.hud.announce('DISTRICT HELD', 'Every wave repelled', 3);
+      this.audio.fanfare();
       this.endT = 3;
     }
   }
@@ -449,6 +509,7 @@ export class Game {
     const p = this.player;
     p.health = Math.min(p.maxHealth, p.health + DEPOT_HEAL);
     this.feedback.toast('RESUPPLIED — gas, blades, bandages');
+    this.audio.resupply();
     this.particles.emit(p.pos, 20, { color: 0x9fd4ff, speed: 4, spread: 1, size: 0.6, grow: 1, life: 0.8, gravity: -2, drag: 2, alpha: 0.6 });
   }
 
@@ -486,6 +547,7 @@ export class Game {
     this.pendingStruggle = 0;
     this.grapple.releaseAll();
     p.damage(GRAB_ESCAPE.initialDamage);
+    this.audio.grabbed();
     this.cameraRig.addShake(0.7);
     this.feedback.screenFlash('rgba(200,20,10,0.45)');
     this.feedback.toast('GRABBED!', 1.2);
@@ -517,6 +579,7 @@ export class Game {
     const p = this.player;
     if (p.grabbed || !p.alive) return;
     p.damage(18);
+    this.audio.hurt();
     this.grapple.releaseAll();
     p.vel.addScaledVector(dir, 24);
     p.vel.y += 9;
@@ -531,6 +594,14 @@ export class Game {
         case 'hit':
         case 'kill': {
           const label = e.type === 'kill' ? 'kill' : PART_LABEL[e.part];
+          this.slashTrail.hit = true;
+          if (e.type === 'kill') {
+            this.audio.kill();
+            this.slowmoT = 0.45; // cinematic beat after the hit-stop
+          }
+          else if (e.damage > 0) this.audio.flesh(e.damage);
+          else this.audio.dull();
+          this.particles.emit(e.point, 10, { color: 0xfff2c0, speed: 18, spread: 1, size: 0.18, life: 0.3, gravity: 20, drag: 1, alpha: 1 });
           fb.damageNumber(e.point, e.damage > 0 ? String(e.damage) : 'DULL', label);
           this.hitStop(e.hitStop);
           this.cameraRig.addShake(e.type === 'kill' ? 0.6 : 0.25 + Math.min(0.3, e.damage / 300));
@@ -553,6 +624,7 @@ export class Game {
             fb.screenFlash('rgba(255,240,220,0.35)');
           } else if (e.severed) {
             this.score.limbs++;
+            this.audio.sever();
             this.score.addBonus('SEVER', 25);
             fb.toast(e.severed.startsWith('leg') ? 'LEG SEVERED — giant slowed' : 'ARM SEVERED');
           } else if (e.part === 'nape') {
@@ -561,12 +633,16 @@ export class Game {
           break;
         }
         case 'slash':
+          this.audio.slash(false);
           if (e.broken) fb.toast(`Blades broken! Press ${this.bindingLabel('swap')} to swap`);
           break;
         case 'broken':
+          this.audio.broken();
           fb.toast(`Blades broken! Press ${this.bindingLabel('swap')} to swap`);
           break;
         case 'swap':
+          this.audio.swap();
+          this.particles.emit(this.player.pos, 8, { color: 0xdfe8f0, speed: 5, spread: 1, size: 0.2, life: 1, gravity: 20, drag: 0.5, alpha: 1 });
           fb.toast('Fresh blades');
           break;
         case 'noSpares':
@@ -577,7 +653,13 @@ export class Game {
     this.combat.events.length = 0;
 
     for (const e of this.giants.events) {
-      if (e.type === 'grab') {
+      if (e.type === 'spot' || e.type === 'sprint') {
+        this.audio.roar(e.giant.H, e.giant.abnormal, this.player.pos.distanceTo(e.giant.pos), this.panFor(e.giant.pos));
+      } else if (e.type === 'windup') {
+        this.audio.windup(this.player.pos.distanceTo(e.giant.pos), this.panFor(e.giant.pos));
+      } else if (e.type === 'swipe') {
+        this.audio.whoosh(this.panFor(e.giant.pos));
+      } else if (e.type === 'grab') {
         this.onGrabbed(e.giant, e.side);
       } else if (e.type === 'swipeHit') {
         this.onSwiped(e.giant, e.dir);
@@ -594,18 +676,78 @@ export class Game {
         this.particles.emit(n, 40, { color: 0xf2efe8, speed: 5, spread: 1, size: 1.6, grow: 2.2, life: 2.2, gravity: -3, drag: 1.2, alpha: 0.45, jitter: 1 });
       } else if (e.type === 'bodyfall') {
         const g = e.giant;
+        this.audio.bodyfall(g.H, this.player.pos.distanceTo(g.pos), this.panFor(g.pos));
         this.cameraRig.addShake(Math.min(0.7, ((g.H / 15) * 8) / (8 + this.player.pos.distanceTo(g.pos) * 0.3)));
         tmpV.set(g.pos.x + Math.sin(g.yaw) * g.H * 0.6, 0.5, g.pos.z + Math.cos(g.yaw) * g.H * 0.6);
         this.particles.emit(tmpV, 40, { color: 0xb3a58c, speed: g.H * 0.8, spread: 1, size: 2, grow: 3, life: 1.8, gravity: 2, drag: 2, alpha: 0.5, jitter: g.H * 0.4 });
       } else if (e.type === 'step') {
         const g = e.giant;
         const d = this.player.pos.distanceTo(g.pos);
+        this.audio.footstep(g.H, d, this.panFor(g.pos));
+        if (g.H > 11 && d < 90) {
+          tmpV.set(g.pos.x, 0.3, g.pos.z);
+          this.particles.emit(tmpV, 5, { color: 0xb3a58c, speed: 3, spread: 1, size: 1.2, grow: 2, life: 1, gravity: 0, drag: 2, alpha: 0.35, jitter: g.H * 0.15 });
+        }
         if (d < g.H * 4) this.cameraRig.addShake(0.05 * (g.H / 15) * (1 - d / (g.H * 4)));
       }
     }
     this.giants.events.length = 0;
+
+    for (const e of this.grapple.events) {
+      if (e.type === 'fire') this.audio.hookFire();
+      else if (e.type === 'release') this.audio.release();
+      else if (e.type === 'attach') {
+        const tag = e.collider?.tag || 'building';
+        this.audio.hookHit(tag === 'giant' ? 'giant' : tag === 'tree' || tag === 'canopy' ? 'tree' : 'building', this.panFor(e.point), 1);
+        this.particles.emit(e.point, 10, { color: DUST_COLORS[tag] ?? 0xc9bca2, speed: 4, spread: 1, size: 0.35, grow: 1, life: 0.6, gravity: 4, drag: 2, alpha: 0.8 });
+      } else if (e.type === 'empty') {
+        this.audio.gasEmpty();
+        this.feedback.toast('OUT OF GAS — find a supply depot');
+      }
+    }
     this.grapple.events.length = 0;
     this.depots.events.length = 0;
+  }
+
+  /** Stereo pan (-1..1) of a world position relative to the camera. */
+  panFor(pos) {
+    const c = this.camera.position, r = this.cameraRig.right;
+    const dx = pos.x - c.x, dy = pos.y - c.y, dz = pos.z - c.z;
+    const d = Math.hypot(dx, dy, dz) || 1;
+    return ((dx * r.x + dz * r.z) / d) * 0.8;
+  }
+
+  /** Per-frame cosmetic particles: gas puffs, steam from corpses and stumps. */
+  emitAmbientParticles(dt) {
+    const p = this.player;
+    const g = this.grapple;
+    if (this.state === 'playing' && p.alive && !p.grabbed && (g.boosting || g.reelingAny)) {
+      const sp = p.speed || 1;
+      tmpV.copy(p.vel).multiplyScalar(-1 / sp);
+      const n = g.boosting ? 2 : 1;
+      this.particles.emit(p.pos, n, {
+        color: 0xf4f4f0, speed: g.boosting ? 7 : 3, spread: 0.35, dir: tmpV, baseVel: tmpB.copy(p.vel).multiplyScalar(0.6),
+        size: g.boosting ? 0.45 : 0.3, grow: 2.5, life: 0.55, gravity: -1, drag: 3, alpha: 0.5,
+      });
+    }
+    this.steamT += dt;
+    if (this.steamT < 0.08) return;
+    this.steamT = 0;
+    for (const gi of this.giants.giants) {
+      if (!gi.alive) {
+        if (gi.deathT < 8) {
+          const hb = gi.rig.hitboxes[Math.floor(Math.random() * 6)];
+          this.particles.emit(hb.world, 2, { color: 0xf2efe8, speed: 2, spread: 1, size: gi.H * 0.12, grow: gi.H * 0.15, life: 2.2, gravity: -4, drag: 1, alpha: 0.3, jitter: gi.H * 0.2 });
+        }
+        continue;
+      }
+      for (const limb of ['armL', 'armR', 'legL', 'legR']) {
+        if (!gi.limbs[limb].severed) continue;
+        const grp = gi._limbGroup(limb);
+        grp.getWorldPosition(tmpV);
+        this.particles.emit(tmpV, 1, { color: 0xf2efe8, speed: 1.5, spread: 1, size: gi.H * 0.05, grow: gi.H * 0.08, life: 1.2, gravity: -3, drag: 1, alpha: 0.4 });
+      }
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -636,7 +778,14 @@ export class Game {
       this.grapple.updateOrigins(renderPos, this.cameraRig.right);
       this.grappleView.update(this.grapple, this.grapple.origins);
     }
+    this.emitAmbientParticles(frameDt);
+    this.slashTrail.update(frameDt, renderPos);
     this.particles.update(frameDt * this.loop.timeScale);
+    this.audio.update(p.speed, this.grapple.boosting, this.grapple.reelingAny, this.state === 'playing' && p.alive);
+    this.perf.frame(frameDt, this.state === 'playing');
+    // Cull giants hidden by fog (saves draw calls and shadow passes).
+    const far = this.quality.fogFar + 40;
+    for (const gi of this.giants.giants) gi.root.visible = gi.pos.distanceTo(this.camera.position) < far;
     this.speedLines.update(frameDt, this.state === 'playing' ? p.speed : 0, this.settings.speedLines);
     this.feedback.update(frameDt, this.camera, this.viewW, this.viewH);
     if (this.state === 'playing' || this.state === 'paused') this.updateHud(frameDt);
@@ -650,6 +799,11 @@ export class Game {
     this.hud.tick(dt);
     hs.health = p.health;
     hs.maxHealth = p.maxHealth;
+    const hurt = p.alive ? Math.max(0, 1 - p.health / 35) : 1;
+    if (Math.abs((this._hurt ?? -1) - hurt) > 0.02) {
+      this._hurt = hurt;
+      this.hurtVignette.style.opacity = hurt.toFixed(2);
+    }
     hs.gas = this.grapple.gas;
     hs.gasMax = this.grapple.gasMax;
     hs.boosting = this.grapple.boosting;

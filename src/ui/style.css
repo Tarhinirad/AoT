@@ -121,3 +121,6 @@ span.key { cursor: default; }
 .resupply .bar { height: 10px; background: rgba(0, 0, 0, 0.5); border: 1px solid var(--gas); border-radius: 3px; overflow: hidden; }
 .resupply .fill { height: 100%; background: var(--gas); width: 0; }
 @media (max-width: 800px) { .minimap { width: 130px; height: 130px; } .hud-bottom-left { width: 200px; } }
+.perf { position: absolute; left: 8px; top: 8px; font: 12px monospace; background: rgba(0, 0, 0, 0.55); padding: 3px 8px; border-radius: 3px; pointer-events: none; z-index: 20; }
+.vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.35) 100%); }
+.hurt-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 45%, rgba(160, 0, 0, 0.55) 100%); opacity: 0; transition: opacity 0.3s; }
