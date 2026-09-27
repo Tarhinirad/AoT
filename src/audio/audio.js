@@ -166,6 +166,13 @@ export class AudioEngine {
     this._tone(o, t, 'triangle', 500, 900, 0.08, 0.4);
   }
 
+  /** Short gas burst (slingshot release). */
+  gasBurst(amount = 1) {
+    if (!this._can()) return;
+    const t = this.ctx.currentTime, o = this._out(0.25 + 0.2 * amount);
+    this._noiseBurst(o, t, 0.28, 'bandpass', 3500, 900, 0.8, 0.9, 0.01);
+  }
+
   slash(hit = false) {
     if (!this._can()) return;
     const t = this.ctx.currentTime, o = this._out(0.4);

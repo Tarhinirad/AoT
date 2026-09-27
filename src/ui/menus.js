@@ -49,7 +49,8 @@ export class Menus {
   _build() {
     const main = this._screen('main', `
       <h1 class="title">SKYHOOK</h1>
-      <p class="subtitle">The wall is breached. Swing, strike the nape, hold the district.</p>
+      <div class="title-rule">THE SIEGE OF ALDMERE</div>
+      <p class="subtitle">The south gate has fallen and giants walk the streets.<br>Take to the rooftops, strike the nape, hold the town.</p>
       <button class="btn primary" data-act="play">PLAY</button>
       <button class="btn" data-act="howto">HOW TO PLAY</button>
       <button class="btn" data-act="settings">SETTINGS</button>
@@ -65,7 +66,9 @@ export class Menus {
       <h2>How to play</h2>
       <div class="controls-list"></div>
       <ul class="tips">
-        <li>Fire a hook at a building, then <b>hold</b> its button to reel in. Release (Shift) at the top of the arc to keep your momentum.</li>
+        <li>Aim at a building: a gold marker shows exactly where the hook will bite. Fire, then <b>hold</b> the button to reel in. The brackets beside the crosshair show which hooks are attached.</li>
+        <li>While hanging from a rope, <b>W A S D</b> pushes you along the swing. Release (Shift) near the top of the arc: letting go at speed gives a small slingshot boost.</li>
+        <li>Reeling slows you down as you reach the wall, so you can zip up to a rooftop without crashing. Gas recharges to half a tank when you stop using it.</li>
         <li>Giants only die from a cut to the <b>nape</b> (back of the neck). Damage scales with your speed: big giants need a fast pass.</li>
         <li>Hitting limbs staggers giants; enough damage severs them. Severed legs make giants crawl. Limbs regrow.</li>
         <li>A giant glowing red is winding up. Grabs come from the front, so get behind or above it.</li>
@@ -84,7 +87,7 @@ export class Menus {
       <div class="setting"><label>Graphics quality</label>
         <select class="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div>
       <div class="setting check"><label><input type="checkbox" class="dynres"> Dynamic resolution (holds 60 fps)</label></div>
-      <div class="setting check"><label><input type="checkbox" class="fov"> Widen FOV with speed</label></div>
+      <div class="setting check"><label><input type="checkbox" class="fov"> Speed camera effects (wider FOV, bank into turns)</label></div>
       <div class="setting check"><label><input type="checkbox" class="lines"> Speed lines</label></div>
       <div class="setting"><label>Volume <span class="val vol-val"></span></label><input type="range" class="vol" min="0" max="1" step="0.05"></div>
       <h3>Key bindings <small>(click, then press a key or mouse button, Esc cancels)</small></h3>

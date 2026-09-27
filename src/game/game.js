@@ -13,6 +13,7 @@ import { CameraRig } from '../player/cameraRig.js';
 import { Aimer } from '../player/aim.js';
 import { GrappleSystem } from '../grapple/grappleSystem.js';
 import { GrappleView } from '../grapple/grappleView.js';
+import { GRAPPLE } from '../grapple/ropeMath.js';
 import { CombatSystem } from '../combat/combatSystem.js';
 import { Feedback } from '../combat/feedback.js';
 import { GiantManager } from '../giants/giantManager.js';
@@ -28,6 +29,11 @@ import { WaveDirector, WAVES } from './waves.js';
 import { AudioEngine } from '../audio/audio.js';
 import { PerfMonitor } from '../core/perf.js';
 import { ScoreKeeper, waveClearBonus } from './score.js';
+import { ATMOS, installFogChunks, createEnvironment } from '../render/atmosphere.js';
+import { PostFX } from '../render/postfx.js';
+
+// Sun-tinted height fog replaces three's fog chunks; must precede any shader compile.
+installFogChunks();
 
 const SPAWN = new THREE.Vector3(0, 3, 40);
 const tmpF = new THREE.Vector3();
@@ -57,11 +63,17 @@ export class Game {
     this.renderer.domElement.classList.add('gl');
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.info.autoReset = false; // count the whole post-processed frame in the perf overlay
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0xdfe6e3, 60, this.quality.fogFar);
+    this.scene.fog = new THREE.Fog(ATMOS.fogColor.clone(), 130, this.quality.fogFar);
+    this.scene.environment = createEnvironment(this.renderer);
+    this.scene.environmentIntensity = 0.5;
     this.camera = new THREE.PerspectiveCamera(72, 1, 0.1, 2400);
+    this.postfx = new PostFX(this.renderer, this.scene, this.camera);
 
     // World
     this.city = generateCity(1337);
@@ -98,7 +110,9 @@ export class Game {
     this.minimap = new Minimap(this.hud.minimapSlot, this.city);
     this.crosshair = document.createElement('div');
     this.crosshair.className = 'crosshair';
-    this.crosshair.innerHTML = '<div class="ring"></div>';
+    this.crosshair.innerHTML = '<div class="ring"></div><div class="hk hk-l"></div><div class="hk hk-r"></div>';
+    this.hookEls = [this.crosshair.querySelector('.hk-l'), this.crosshair.querySelector('.hk-r')];
+    this.hookElState = ['', ''];
     this.hud.root.appendChild(this.crosshair);
 
     this.input = new Input(this.renderer.domElement, this.settings);
@@ -144,8 +158,8 @@ export class Game {
     this.menuT = 0;
     this.hitStopT = 0;
     this.endT = 0;
-    this.intent = { wish: new THREE.Vector3(), jump: false, hooked: false };
-    this.controls = { reel: [false, false], boost: false, look: new THREE.Vector3(0, 0, -1) };
+    this.intent = { wish: new THREE.Vector3(), jump: false, hooked: false, dragScale: 1 };
+    this.controls = { reel: [false, false], boost: false, look: new THREE.Vector3(0, 0, -1), wish: this.intent.wish };
     this.pendingFire = [false, false];
     this.pendingSlash = false;
     this.pendingStruggle = 0;
@@ -280,6 +294,7 @@ export class Game {
     }
     this.renderer.shadowMap.enabled = this.quality.shadows;
     this.scene.fog.far = this.quality.fogFar;
+    this.postfx.setEnabled(!!this.quality.post, { msaa: this.quality.antialias ? 4 : 0, bloom: !!this.quality.bloom });
     this.worldView.applyQuality(this.quality);
     // Materials must recompile when the shadow map toggles.
     this.scene.traverse((o) => {
@@ -291,6 +306,7 @@ export class Game {
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h, false);
+    this.postfx?.resize();
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.particles.setViewportHeight(h * this.renderer.getPixelRatio());
@@ -343,7 +359,7 @@ export class Game {
       if (inp.pressed('hookLeft')) this.pendingFire[0] = true;
       if (inp.pressed('hookRight')) this.pendingFire[1] = true;
     }
-    if (inp.pressed('release')) this.grapple.releaseAll();
+    if (inp.pressed('release')) this.grapple.releaseAll(this.player);
     if (inp.pressed('slash')) {
       if (grabbed) this.pendingStruggle += GRAB_ESCAPE.slashValue;
       else this.pendingSlash = true;
@@ -418,6 +434,7 @@ export class Game {
     } else {
       g.step(dt, p, p.alive ? this.controls : IDLE_CONTROLS, this.raycastHookable);
       this.intent.hooked = g.attachedCount > 0;
+      this.intent.dragScale = this.intent.hooked ? GRAPPLE.hookedDragScale : 1;
       this.intent.jump = p.alive && this.controls.boost && p.grounded && !this.intent.hooked;
       if (!p.alive) this.intent.wish.set(0, 0, 0);
       p.integrate(dt, this.intent);
@@ -695,7 +712,15 @@ export class Game {
 
     for (const e of this.grapple.events) {
       if (e.type === 'fire') this.audio.hookFire();
-      else if (e.type === 'release') this.audio.release();
+      else if (e.type === 'release') {
+        this.audio.release();
+        if (e.boost > 0) {
+          const p = this.player;
+          this.audio.gasBurst(Math.min(1, e.boost / 6));
+          tmpV.copy(p.vel).normalize().multiplyScalar(-1);
+          this.particles.emit(p.pos, 10, { color: 0xf4f4f0, speed: 9, spread: 0.3, dir: tmpV, baseVel: tmpB.copy(p.vel).multiplyScalar(0.4), size: 0.5, grow: 3, life: 0.6, gravity: -1, drag: 3, alpha: 0.55 });
+        }
+      }
       else if (e.type === 'attach') {
         const tag = e.collider?.tag || 'building';
         this.audio.hookHit(tag === 'giant' ? 'giant' : tag === 'tree' || tag === 'canopy' ? 'tree' : 'building', this.panFor(e.point), 1);
@@ -730,6 +755,7 @@ export class Game {
         size: g.boosting ? 0.45 : 0.3, grow: 2.5, life: 0.55, gravity: -1, drag: 3, alpha: 0.5,
       });
     }
+    this.emitTownAmbience(dt);
     this.steamT += dt;
     if (this.steamT < 0.08) return;
     this.steamT = 0;
@@ -747,6 +773,27 @@ export class Game {
         grp.getWorldPosition(tmpV);
         this.particles.emit(tmpV, 1, { color: 0xf2efe8, speed: 1.5, spread: 1, size: gi.H * 0.05, grow: gi.H * 0.08, life: 1.2, gravity: -3, drag: 1, alpha: 0.4 });
       }
+    }
+  }
+
+  /** Chimney smoke and brazier embers near the camera (cosmetic). */
+  emitTownAmbience(dt) {
+    this.townFxT = (this.townFxT || 0) + dt;
+    if (this.townFxT < 0.12) return;
+    this.townFxT = 0;
+    const cam = this.camera.position;
+    const wv = this.worldView;
+    let n = 0;
+    for (const c of wv.chimneyTops) {
+      if (Math.abs(c.x - cam.x) > 140 || Math.abs(c.z - cam.z) > 140) continue;
+      if (Math.random() < 0.55) continue;
+      this.particles.emit(c, 1, { color: 0x9a948c, speed: 0.6, spread: 1, dir: tmpV.set(0.3, 1, 0.2), baseVel: tmpB.set(0.8, 1.6, 0.4), size: 1.2, grow: 1.6, life: 4, gravity: -0.15, drag: 0.15, alpha: 0.28 });
+      if (++n > 16) break;
+    }
+    for (const f of wv.fireSources) {
+      if (f.distanceToSquared(cam) > 180 * 180) continue;
+      this.particles.emit(f, 1, { color: 0xffa040, speed: 1.5, spread: 1, baseVel: tmpB.set(0, 3, 0), size: 0.18, grow: -0.05, life: 1.6, gravity: -0.6, drag: 0.4, alpha: 1 });
+      this.particles.emit(f, 1, { color: 0x3a3430, speed: 0.6, spread: 1, baseVel: tmpB.set(0.4, 2.2, 0.2), size: 1.0, grow: 1.4, life: 2.5, gravity: -0.2, drag: 0.3, alpha: 0.22 });
     }
   }
 
@@ -774,9 +821,11 @@ export class Game {
       this.playerView.update(frameDt, renderPos, p, this.cameraRig.yaw, this.grapple.attachedCount > 0);
       this.playerView.setBladesVisible(!this.combat.blades.broken);
       this.cameraRig.extraDistance = p.grabbed ? 5 : !p.alive ? 8 : 0;
-      this.cameraRig.update(frameDt, renderPos, p.speed, this.colliders, this.settings.fovEffects);
+      this.cameraRig.update(frameDt, renderPos, p.speed, this.colliders, this.settings.fovEffects, p.grabbed ? null : p.vel);
       this.grapple.updateOrigins(renderPos, this.cameraRig.right);
-      this.grappleView.update(this.grapple, this.grapple.origins);
+      const showAim = this.state === 'playing' && p.alive && !p.grabbed;
+      this.grappleView.update(this.grapple, this.grapple.origins, this.camera, showAim ? this.aimer : null, frameDt);
+      this.updateCrosshairHooks();
     }
     this.emitAmbientParticles(frameDt);
     this.slashTrail.update(frameDt, renderPos);
@@ -789,8 +838,21 @@ export class Game {
     this.speedLines.update(frameDt, this.state === 'playing' ? p.speed : 0, this.settings.speedLines);
     this.feedback.update(frameDt, this.camera, this.viewW, this.viewH);
     if (this.state === 'playing' || this.state === 'paused') this.updateHud(frameDt);
-    this.worldView.update(this.state === 'menu' ? tmpV.set(0, 0, 40) : renderPos, this.time);
-    this.renderer.render(this.scene, this.camera);
+    this.worldView.update(this.state === 'menu' ? tmpV.set(0, 0, 40) : renderPos, this.time, this.camera);
+    this.renderer.info.reset();
+    this.postfx.render(frameDt);
+  }
+
+  /** Crosshair brackets: one per hook, lit while attached, pulsing while in flight. */
+  updateCrosshairHooks() {
+    for (let i = 0; i < 2; i++) {
+      const h = this.grapple.hooks[i];
+      const st = h.attached ? (h.reeling ? 'hk reel' : 'hk on') : h.state === 'flying' ? 'hk fly' : 'hk';
+      if (st !== this.hookElState[i]) {
+        this.hookElState[i] = st;
+        this.hookEls[i].className = st + (i === 0 ? ' hk-l' : ' hk-r');
+      }
+    }
   }
 
   updateHud(dt) {
@@ -803,6 +865,7 @@ export class Game {
     if (Math.abs((this._hurt ?? -1) - hurt) > 0.02) {
       this._hurt = hurt;
       this.hurtVignette.style.opacity = hurt.toFixed(2);
+      this.postfx.setHurt(hurt);
     }
     hs.gas = this.grapple.gas;
     hs.gasMax = this.grapple.gasMax;

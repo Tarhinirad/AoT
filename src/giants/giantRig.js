@@ -20,9 +20,9 @@ function sharedGeos() {
   SHARED.head = new THREE.IcosahedronGeometry(0.5, 1);
   SHARED.sphere = new THREE.IcosahedronGeometry(0.5, 0);
   SHARED.torso = new THREE.CylinderGeometry(0.5, 0.42, 1, 7);
-  SHARED.dark = new THREE.MeshLambertMaterial({ color: 0x1c1512 });
-  SHARED.teeth = new THREE.MeshLambertMaterial({ color: 0xe8e0cc });
-  SHARED.napeMat = new THREE.MeshLambertMaterial({ color: 0x8a2f2a, emissive: 0x3a0806 });
+  SHARED.dark = new THREE.MeshStandardMaterial({ color: 0x1c1512, roughness: 0.6 });
+  SHARED.teeth = new THREE.MeshStandardMaterial({ color: 0xe8e0cc, roughness: 0.4 });
+  SHARED.napeMat = new THREE.MeshStandardMaterial({ color: 0x8a2f2a, emissive: 0x4a0a06, roughness: 0.5 });
   return SHARED;
 }
 
@@ -32,8 +32,8 @@ const HAIRS = [0x2a1d14, 0x4b3322, 0x7a5a36, 0x1a1a1a, 0x9c8a6a];
 export function buildGiantRig(H, rng, abnormal = false) {
   const G = sharedGeos();
   const skinColor = rng.pick(SKINS);
-  const skin = new THREE.MeshLambertMaterial({ color: skinColor, flatShading: true, emissive: 0x000000 });
-  const hairMat = new THREE.MeshLambertMaterial({ color: rng.pick(HAIRS), flatShading: true });
+  const skin = new THREE.MeshStandardMaterial({ color: skinColor, flatShading: true, emissive: 0x000000, roughness: 0.62 });
+  const hairMat = new THREE.MeshStandardMaterial({ color: rng.pick(HAIRS), flatShading: true, roughness: 0.9 });
 
   // Proportion variation for an uncanny look
   const headS = rng.range(0.14, 0.18) * (abnormal ? 1.15 : 1);

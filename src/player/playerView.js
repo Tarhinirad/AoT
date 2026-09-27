@@ -1,19 +1,38 @@
 import * as THREE from 'three';
 import { dampAngle, damp, clamp } from '../core/math.js';
 
+/** Green cloak with the town's crossed-hooks crest on the back. */
+function cloakTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, 64, 64);
+  // Cone UVs wrap around; the back of the cape is the middle of the texture.
+  g.strokeStyle = '#e8dcc0';
+  g.lineWidth = 5;
+  g.beginPath();
+  g.moveTo(24, 20); g.lineTo(40, 44);
+  g.moveTo(40, 20); g.lineTo(24, 44);
+  g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 /** Low-poly soldier: cloak, harness, gas canisters and two blades. */
 export class PlayerView {
   constructor(scene) {
     this.root = new THREE.Group();
     this.body = new THREE.Group(); // leans/rotates
     this.root.add(this.body);
-    const cloak = new THREE.MeshLambertMaterial({ color: 0x3f6b45, flatShading: true });
-    const skin = new THREE.MeshLambertMaterial({ color: 0xe0b48f });
-    const leather = new THREE.MeshLambertMaterial({ color: 0x6b4a2f });
-    const metal = new THREE.MeshLambertMaterial({ color: 0x9aa3ad });
-    const white = new THREE.MeshLambertMaterial({ color: 0xe9e4d8 });
-    const hair = new THREE.MeshLambertMaterial({ color: 0x3a2a1e });
-    this.bladeMat = new THREE.MeshLambertMaterial({ color: 0xdfe8f0, emissive: 0x223344 });
+    const cloak = new THREE.MeshStandardMaterial({ color: 0x2f5a36, flatShading: true, roughness: 0.85, map: cloakTexture() });
+    const skin = new THREE.MeshStandardMaterial({ color: 0xe0b48f, roughness: 0.7 });
+    const leather = new THREE.MeshStandardMaterial({ color: 0x5e3f26, roughness: 0.65 });
+    const metal = new THREE.MeshStandardMaterial({ color: 0xaab3bd, roughness: 0.3, metalness: 0.9 });
+    const white = new THREE.MeshStandardMaterial({ color: 0xe9e4d8, roughness: 0.8 });
+    const hair = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.9 });
+    this.bladeMat = new THREE.MeshStandardMaterial({ color: 0xe8f0f6, roughness: 0.15, metalness: 1, emissive: 0x16222e });
 
     const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.22, 0.7, 6), white);
     torso.position.y = 0.15;
@@ -21,7 +40,7 @@ export class PlayerView {
     const jacket = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.28, 0.42, 6), leather);
     jacket.position.y = 0.32;
     this.body.add(jacket);
-    const cape = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.95, 6, 1, true), cloak);
+    const cape = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.95, 8, 1, true), cloak);
     cape.position.set(0, 0.05, 0.12);
     cape.material.side = THREE.DoubleSide;
     this.cape = cape;

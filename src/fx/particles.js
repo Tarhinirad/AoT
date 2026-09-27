@@ -50,6 +50,8 @@ export class Particles {
           float r = dot(d, d) * 4.0;
           if (r > 1.0) discard;
           gl_FragColor = vec4(vC, vA * (1.0 - r));
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }`,
     });
     this.points = new THREE.Points(geo, mat);
@@ -124,7 +126,7 @@ export class Particles {
       this.pos[i * 3] += this.vel[i * 3] * dt;
       this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
       this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
-      this.size[i] += this.grow[i] * dt;
+      this.size[i] = Math.max(0, this.size[i] + this.grow[i] * dt);
       const t = this.life[i] / this.maxLife[i];
       this.alpha[i] = this.life[i] > 0 ? this.baseAlpha[i] * Math.min(1, t * 2.5) : 0;
     }
