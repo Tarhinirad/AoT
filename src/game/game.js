@@ -141,10 +141,7 @@ export class Game {
     });
 
     this.perf = new PerfMonitor(this.overlay, this.renderer);
-    this.perf.onRatio = (r) => {
-      this.renderer.setPixelRatio(r);
-      this.resize();
-    };
+    this.perf.onRatio = (r) => this.setRenderScale(r);
     this.perf.onTooSlow = () => this.lowerQuality();
     if (this.debug.has('fps')) this.perf.toggle();
     window.addEventListener('keydown', (e) => {
@@ -204,8 +201,8 @@ export class Game {
    */
   async precompile() {
     const r = this.renderer;
-    // Tone mapping and colour space follow the bound target: match the post chain.
-    r.setRenderTarget(this.postfx.composer ? this.postfx.composer.readBuffer : null);
+    // Tone mapping and colour space follow the bound target: match the render chain.
+    r.setRenderTarget(this.postfx.composer.readBuffer);
     try {
       await r.compileAsync(this.scene, this.camera);
     } catch {
@@ -313,15 +310,46 @@ export class Game {
     if (this.state === 'paused') this.menus.setPauseHint("Couldn't capture the mouse. Click RESUME to try again.");
   }
 
-  /** Even the lowest dynamic resolution can't keep up: drop one graphics preset. */
-  lowerQuality() {
+  /**
+   * Even the lowest dynamic resolution can't keep up: drop one graphics preset.
+   * Dropping shadows needs new shader variants, so they compile in the
+   * background first (frames keep using the current ones) and the switch
+   * happens once they're ready, with no freeze.
+   */
+  async lowerQuality() {
     const order = ['high', 'medium', 'low'];
     const i = order.indexOf(this.settings.quality);
-    if (i < 0 || i >= order.length - 1) return;
-    this.settings.quality = order[i + 1];
+    if (this._lowering || i < 0 || i >= order.length - 1) return;
+    this._lowering = true;
+    const next = order[i + 1];
+    const q = QUALITY_PRESETS[next];
+    if (q.shadows !== this.quality.shadows) await this.precompileShadows(q.shadows);
+    this._lowering = false;
+    if (this.settings.quality !== order[i]) return; // the player changed it meanwhile
+    this.settings.quality = next;
     saveSettings(this.settings);
-    this.applyQuality();
-    this.feedback.toast(`Graphics lowered to ${this.settings.quality.toUpperCase()} to keep the game smooth`, 3);
+    this.applyQuality(true);
+    this.feedback.toast(`Graphics lowered to ${next.toUpperCase()} to keep the game smooth`, 3);
+  }
+
+  /** Compile the scene's shaders for the given shadow setting without switching to it. */
+  async precompileShadows(on) {
+    const r = this.renderer, sun = this.worldView.sun;
+    const prev = [r.shadowMap.enabled, sun.castShadow];
+    let ready;
+    r.shadowMap.enabled = on;
+    sun.castShadow = on;
+    r.setRenderTarget(this.postfx.composer.readBuffer);
+    try {
+      ready = r.compileAsync(this.scene, this.camera); // compiles now, resolves when linked
+    } catch {
+      ready = Promise.resolve();
+    } finally {
+      r.setRenderTarget(null);
+      [r.shadowMap.enabled, sun.castShadow] = prev;
+    }
+    const timeout = new Promise((resolve) => setTimeout(resolve, 10000));
+    await Promise.race([ready.catch(() => {}), timeout]);
   }
 
   onSettingsChanged(qualityChanged) {
@@ -329,32 +357,41 @@ export class Game {
     this.audio.setVolume(this.settings.volume);
   }
 
-  applyQuality() {
+  /** @param {boolean} keepScale stay at the current dynamic resolution (automatic fallback) */
+  applyQuality(keepScale = false) {
+    const shadowsBefore = this.renderer.shadowMap.enabled;
     this.quality = QUALITY_PRESETS[this.settings.quality] || QUALITY_PRESETS.medium;
-    const ratio = Math.min(window.devicePixelRatio || 1, this.quality.pixelRatio);
-    this.renderer.setPixelRatio(ratio);
-    if (this.perf) {
-      this.perf.dynamic = this.settings.dynamicRes;
-      this.perf.setMax(ratio);
-    }
+    this.perf.dynamic = this.settings.dynamicRes;
+    this.perf.setMax(Math.min(window.devicePixelRatio || 1, this.quality.pixelRatio), keepScale);
     this.renderer.shadowMap.enabled = this.quality.shadows;
     this.scene.fog.far = this.quality.fogFar;
-    this.postfx.setEnabled(!!this.quality.post, { msaa: this.quality.msaa, bloom: !!this.quality.bloom });
+    this.postfx.configure({ msaa: this.quality.msaa, bloom: !!this.quality.bloom });
     this.worldView.applyQuality(this.quality);
-    // Materials must recompile when the shadow map toggles.
-    this.scene.traverse((o) => {
-      if (o.material) o.material.needsUpdate = true;
-    });
-    this.resize();
+    // Materials need their shadow variants when the shadow map toggles.
+    if (shadowsBefore !== this.quality.shadows) {
+      this.scene.traverse((o) => {
+        if (o.material) o.material.needsUpdate = true;
+      });
+    }
+    this.setRenderScale(this.perf.ratio);
+  }
+
+  /** Internal render resolution (pixel ratio). Only the render chain resizes, never the canvas. */
+  setRenderScale(r) {
+    this.postfx.setScale(r);
+    this.particles.setViewportHeight(window.innerHeight * r);
   }
 
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
+    // The canvas runs at the display's own resolution (capped at 2x) so the HUD
+    // and the upscaled image stay sharp; quality only changes the internal scale.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(w, h, false);
-    this.postfx?.resize();
+    this.postfx.resize();
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.particles.setViewportHeight(h * this.renderer.getPixelRatio());
+    this.particles.setViewportHeight(h * this.postfx.scale);
     this.viewW = w;
     this.viewH = h;
   }

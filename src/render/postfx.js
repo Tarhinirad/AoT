@@ -39,31 +39,32 @@ function createGradedOutputPass() {
 }
 
 /**
- * Optional post-processing chain: scene → bloom → grade + tone map + sRGB.
- * Without it (low quality) the renderer tone maps directly.
+ * Render chain used at every quality level: scene → (bloom) → grade + tone
+ * map + sRGB. The scene renders into the chain's own target at `scale` (a
+ * pixel ratio of CSS pixels) and the final pass stretches it over the canvas,
+ * so dynamic resolution never resizes the canvas itself. Resizing a WebGL
+ * canvas clears it, which shows as a black flash on many GPUs.
  */
 export class PostFX {
   constructor(renderer, scene, camera) {
     this.renderer = renderer;
-    this.enabled = false;
     this.scene = scene;
     this.camera = camera;
     this.composer = null;
+    this.scale = 1;
   }
 
-  setEnabled(on, { msaa = 4, bloom = true } = {}) {
+  /** (Re)build the chain. Low quality has neither MSAA nor bloom but keeps the grade. */
+  configure({ msaa = 0, bloom = true } = {}) {
     this._dispose();
-    this.enabled = on;
-    if (!on) return;
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: msaa });
+    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: msaa });
     const composer = new EffectComposer(this.renderer, rt);
     composer.addPass(new RenderPass(this.scene, this.camera));
     if (bloom) {
       // Threshold sits above sunlit walls, cobbles and clouds: three's bloom passes
       // the full colour of anything over it, so a low threshold hazed the whole
       // view when facing the sun. Lanterns, fires and the sun itself still glow.
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.3, 0.35, 1.4);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.3, 0.35, 1.4);
       composer.addPass(this.bloom);
     }
     this.grade = createGradedOutputPass();
@@ -83,11 +84,17 @@ export class PostFX {
     this.grade = null;
   }
 
+  /** Internal resolution as a pixel ratio; the canvas keeps its own size. */
+  setScale(ratio) {
+    if (ratio === this.scale) return;
+    this.scale = ratio;
+    this.resize();
+  }
+
   resize() {
     if (!this.composer) return;
-    const w = window.innerWidth, h = window.innerHeight;
-    this.composer.setPixelRatio(this.renderer.getPixelRatio());
-    this.composer.setSize(w, h);
+    this.composer.setPixelRatio(this.scale);
+    this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
   setHurt(k) {
@@ -95,7 +102,6 @@ export class PostFX {
   }
 
   render(dt) {
-    if (this.composer) this.composer.render(dt);
-    else this.renderer.render(this.scene, this.camera);
+    this.composer.render(dt);
   }
 }

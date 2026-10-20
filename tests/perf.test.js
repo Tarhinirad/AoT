@@ -63,6 +63,25 @@ describe('dynamic resolution', () => {
     expect(perf.changes.length).toBe(down + 3);
   });
 
+  it('asks for a cheaper preset only once per preset', () => {
+    const perf = monitor();
+    feed(perf, 30, 60);
+    expect(perf.tooSlow).toBe(1);
+    perf.setMax(0.75, true); // the game switched preset
+    feed(perf, 30, 60);
+    expect(perf.tooSlow).toBe(2);
+  });
+
+  it('keeps the current ratio across an automatic preset change', () => {
+    const perf = monitor();
+    feed(perf, 6, 60);
+    expect(perf.ratio).toBeCloseTo(PERF.minRatio, 5);
+    perf.setMax(0.75, true);
+    expect(perf.ratio).toBeCloseTo(PERF.minRatio, 5);
+    perf.setMax(0.75);
+    expect(perf.ratio).toBe(0.75);
+  });
+
   it('ignores slow frames while not playing', () => {
     const perf = monitor();
     feed(perf, 10, 60, false);

@@ -44,15 +44,18 @@ export class PerfMonitor {
     this.dynamic = true;
     this.onRatio = null;
     this.onTooSlow = null;
+    this.tooSlowFired = false; // asked once for this preset; setMax() re-arms it
   }
 
   toggle() {
     if (this.el) this.el.style.display = this.el.style.display === 'none' ? '' : 'none';
   }
 
-  setMax(maxRatio) {
+  /** @param {boolean} keepRatio stay at the current ratio if it fits (a fallback shouldn't bounce back up) */
+  setMax(maxRatio, keepRatio = false) {
     this.maxRatio = maxRatio;
-    this.ratio = maxRatio;
+    this.ratio = keepRatio ? Math.min(this.ratio, maxRatio) : maxRatio;
+    this.tooSlowFired = false;
     this.slowT = this.fastT = this.tooSlowT = 0;
     this.cooldown = 0;
     this.nextCooldown = PERF.probeCooldown;
@@ -90,7 +93,7 @@ export class PerfMonitor {
     const min = Math.min(PERF.minRatio, this.maxRatio);
     const atMin = this.ratio <= min + 1e-3;
     this.tooSlowT = atMin && this.avgMs > PERF.tooSlowMs ? this.tooSlowT + window : 0;
-    if (this.tooSlowT >= PERF.tooSlowHold) {
+    if (this.tooSlowT >= PERF.tooSlowHold && !this.tooSlowFired) {
       this._tooSlow();
     } else if (this.slowT >= PERF.slowHold && !atMin) {
       // Pixel cost scales with ratio², so aim for the ratio that would hit ~17 ms.
@@ -117,6 +120,7 @@ export class PerfMonitor {
   }
 
   _tooSlow() {
+    this.tooSlowFired = true;
     this.tooSlowT = 0;
     this.slowT = 0;
     this.onTooSlow?.();
