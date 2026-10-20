@@ -33,6 +33,8 @@ export class Giant {
 
     this.pos = new THREE.Vector3(x, 0, z);
     this.yaw = yaw;
+    this.prevPos = this.pos.clone(); // previous physics step, for render interpolation
+    this.prevYaw = yaw;
     this.speed = 0; // current forward speed
     this.desiredSpeed = 0;
     this.desiredYaw = yaw;
@@ -73,6 +75,8 @@ export class Giant {
   }
 
   update(dt, colliders) {
+    this.prevPos.copy(this.pos);
+    this.prevYaw = this.yaw;
     const a = this.anim;
     if (!this.alive) {
       this.deathT += dt;
@@ -132,6 +136,17 @@ export class Giant {
 
     if (this.flashT > 0) this.flashT -= dt;
     this._applyPose();
+  }
+
+  /**
+   * Render-time smoothing: place the body between the last two physics steps
+   * so giants glide instead of juddering when the display rate doesn't match
+   * the 120 Hz simulation. The next step restores the simulated pose.
+   */
+  interpolate(alpha) {
+    this.root.position.x = this.prevPos.x + (this.pos.x - this.prevPos.x) * alpha;
+    this.root.position.z = this.prevPos.z + (this.pos.z - this.prevPos.z) * alpha;
+    this.root.rotation.y = this.prevYaw + angleDelta(this.prevYaw, this.yaw) * alpha;
   }
 
   _applyPose() {

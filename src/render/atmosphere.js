@@ -137,7 +137,9 @@ export function createSkyMaterial() {
 
 export function createSky(scene) {
   const sky = new THREE.Mesh(new THREE.SphereGeometry(1800, 32, 16), createSkyMaterial());
-  sky.renderOrder = -1;
+  // Drawn after all other opaque geometry: its depth is pinned to the far plane
+  // (xyww), so the expensive cloud shader only runs where no building covers it.
+  sky.renderOrder = 1e6;
   sky.frustumCulled = false;
   scene.add(sky);
   return sky;

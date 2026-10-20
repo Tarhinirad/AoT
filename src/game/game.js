@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { FixedLoop } from '../core/loop.js';
 import { Input } from '../core/input.js';
-import { loadSettings, QUALITY_PRESETS, codeLabel } from '../core/settings.js';
+import { loadSettings, saveSettings, QUALITY_PRESETS, codeLabel } from '../core/settings.js';
 import { createRng } from '../core/rng.js';
 import { StaticColliders } from '../world/colliders.js';
 import { generateCity, buildColliders } from '../world/city.js';
@@ -59,7 +59,9 @@ export class Game {
     this.rng = createRng((Date.now() ^ 0x5bd1e995) >>> 0);
     this.debug = new URLSearchParams(location.search);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: this.quality.antialias, powerPreference: 'high-performance' });
+    // No MSAA on the canvas: the post chain renders into its own (optionally
+    // multisampled) target, and a multisampled canvas would only add a resolve.
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     this.renderer.domElement.classList.add('gl');
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -126,6 +128,7 @@ export class Game {
       onSettingsChanged: (q) => this.onSettingsChanged(q),
     });
     this.input.onLockChange = (locked) => this.onLockChange(locked);
+    this.input.onLockError = () => this.onLockError();
 
     // Audio starts on the first user gesture (autoplay policy).
     this.audio = new AudioEngine();
@@ -142,6 +145,7 @@ export class Game {
       this.renderer.setPixelRatio(r);
       this.resize();
     };
+    this.perf.onTooSlow = () => this.lowerQuality();
     if (this.debug.has('fps')) this.perf.toggle();
     window.addEventListener('keydown', (e) => {
       if (e.code === 'F3') {
@@ -233,6 +237,7 @@ export class Game {
     if (this.state !== 'playing') return;
     this.state = 'paused';
     this.audio.update(0, false, false, false);
+    this.menus.setPauseHint('');
     this.menus.show('pause');
     this.input.exitLock();
   }
@@ -279,6 +284,24 @@ export class Game {
     if (!locked && this.state === 'playing' && !this.debug.has('autoplay')) this.pause();
   }
 
+  /** The mouse couldn't be captured: pause rather than run with no aiming. */
+  onLockError() {
+    if (this.debug.has('autoplay')) return;
+    if (this.state === 'playing') this.pause();
+    if (this.state === 'paused') this.menus.setPauseHint("Couldn't capture the mouse. Click RESUME to try again.");
+  }
+
+  /** Even the lowest dynamic resolution can't keep up: drop one graphics preset. */
+  lowerQuality() {
+    const order = ['high', 'medium', 'low'];
+    const i = order.indexOf(this.settings.quality);
+    if (i < 0 || i >= order.length - 1) return;
+    this.settings.quality = order[i + 1];
+    saveSettings(this.settings);
+    this.applyQuality();
+    this.feedback.toast(`Graphics lowered to ${this.settings.quality.toUpperCase()} to keep the game smooth`, 3);
+  }
+
   onSettingsChanged(qualityChanged) {
     if (qualityChanged) this.applyQuality();
     this.audio.setVolume(this.settings.volume);
@@ -294,7 +317,7 @@ export class Game {
     }
     this.renderer.shadowMap.enabled = this.quality.shadows;
     this.scene.fog.far = this.quality.fogFar;
-    this.postfx.setEnabled(!!this.quality.post, { msaa: this.quality.antialias ? 4 : 0, bloom: !!this.quality.bloom });
+    this.postfx.setEnabled(!!this.quality.post, { msaa: this.quality.msaa, bloom: !!this.quality.bloom });
     this.worldView.applyQuality(this.quality);
     // Materials must recompile when the shadow map toggles.
     this.scene.traverse((o) => {
@@ -834,7 +857,11 @@ export class Game {
     this.perf.frame(frameDt, this.state === 'playing');
     // Cull giants hidden by fog (saves draw calls and shadow passes).
     const far = this.quality.fogFar + 40;
-    for (const gi of this.giants.giants) gi.root.visible = gi.pos.distanceTo(this.camera.position) < far;
+    const giantAlpha = this.state === 'playing' || this.state === 'menu' ? alpha : 1;
+    for (const gi of this.giants.giants) {
+      gi.root.visible = gi.pos.distanceTo(this.camera.position) < far;
+      gi.interpolate(giantAlpha);
+    }
     this.speedLines.update(frameDt, this.state === 'playing' ? p.speed : 0, this.settings.speedLines);
     this.feedback.update(frameDt, this.camera, this.viewW, this.viewH);
     if (this.state === 'playing' || this.state === 'paused') this.updateHud(frameDt);

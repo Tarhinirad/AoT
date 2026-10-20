@@ -74,7 +74,7 @@ Every action except pause can be rebound (keyboard or mouse button) in **Setting
 - Golden-hour lighting: a low warm sun with soft shadows, a sky dome with drifting procedural clouds, and an environment map baked from that sky for PBR ambient light.
 - All surfaces are procedural shaders with no textures: timber framing, windows (a few lit warm), ashlar stone, clay tiles and slate with moss, cobbled streets with a fan-laid market square. Patterns fade out by screen-space derivative so distant facades don't shimmer.
 - Sun-tinted height fog: denser near the ground and glowing warm toward the sun, matched exactly to the sky horizon.
-- Post-processing (medium/high quality): HDR bloom, ACES tone mapping, a warm/cool colour grade, vignette, and edge desaturation when badly hurt.
+- Post-processing (medium/high quality): MSAA (2× medium, 4× high), HDR bloom, ACES tone mapping, a warm/cool colour grade, vignette, and edge desaturation when badly hurt. Grade and tone mapping share one full-screen pass.
 
 **Game loop and UI**
 - Wave mode: 10 escalating waves (large giants from wave 3, abnormals from wave 4), trickle spawns, intermissions, and victory.
@@ -85,7 +85,7 @@ Every action except pause can be rebound (keyboard or mouse button) in **Setting
 
 **Audio and polish**
 - All sound is synthesized live with the Web Audio API: wind that rises with speed, gas hiss, hook zips, blade swishes, flesh impacts, steam, footsteps, roars, bells and more, all panned in stereo relative to the camera.
-- Performance: an instanced town (every wall, roof, merlon, chimney, banner and stall shares a handful of draw calls), merged giant meshes, allocation-free hot paths, fog culling, texel-snapped shadows, and dynamic resolution to hold 60 fps.
+- Performance: an instanced town (the biggest lists split into 160 m tiles, so far tiles are culled and near ones draw first), merged giant meshes, smoothly interpolated giants, allocation-free hot paths, fog culling, texel-snapped shadows, the sky shaded only where nothing covers it, and dynamic resolution that falls back to a cheaper graphics preset if needed to hold 60 fps.
 
 ## Build and run
 
@@ -177,7 +177,10 @@ tests/       Vitest suites (rope physics, grapple system, damage and combat, AI 
 - **Procedural facades from instance data.** Each building box carries `(style, seed, plinth height, v offset)` in an instanced attribute; the shader derives face-local metres from the instance scale and lays out bays, floors, windows, doors and timber braces from that. Hundreds of buildings render in a few draw calls with no textures.
 - **Fog is patched into three's shader chunks** (height falloff plus sun in-scattering) with the sun direction baked in as a constant, so every built-in material gets it without per-material uniforms.
 - **Row houses instead of blocks:** deep lots are split into two back-to-back rows of 6–8.5 m wide houses. Jetties only overhang the street, never a neighbour; a layout test checks that no two footprints overlap.
-- **Performance:** instanced city geometry, each giant's per-bone meshes merged by material (~35 → ~15 draw calls), preallocated raycast results (no per-frame garbage in aiming), giants beyond the fog hidden, shadow frustum snapped to texels, and **dynamic resolution** that steps the pixel ratio down when frames exceed 20 ms and back up when there's headroom. Press **F3** (or add `?fps`) for an FPS / draw-call overlay.
+- **Performance:** instanced city geometry. Lists of 400+ instances (facades, forest) are split into 160 m tiles, so three's frustum culling and front-to-back sorting work per tile in the main view and the shadow pass. This draws near facades before the ones they hide, for ~40 extra draw calls. Each giant's per-bone meshes are merged by material (~35 → ~15 draw calls), raycast results are preallocated (no per-frame garbage in aiming), giants beyond the fog are hidden, and the shadow frustum is snapped to texels. The sky draws after all opaque geometry with its depth pinned to the far plane, so its cloud shader only runs on visible sky. The canvas itself is never multisampled; MSAA lives on the post-processing target.
+- **Dynamic resolution:** after 1 s of frames over 20 ms the pixel ratio drops in proportion to how slow they are (aiming for ~17 ms, down to ×0.5). After 4 s of smooth frames it probes 0.1 back up; a probe that fails doubles the wait before the next one (up to 60 s), so a GPU right at the limit doesn't keep flipping resolution. If ×0.5 still runs over 24 ms for 3 s, the game drops one graphics preset (high → medium → low), saves it and says so. Turning dynamic resolution off disables all of this. Press **F3** (or add `?fps`) for an FPS / draw-call overlay.
+- **Render interpolation:** physics runs at 120 Hz. The player and the giants' bodies are drawn between the last two physics steps, so movement stays smooth on 60, 144 or 240 Hz displays.
+- **Pointer lock:** if the browser refuses to capture the mouse (Chrome does for about a second after Esc releases it), the game pauses and asks you to click Resume again, instead of running with no aiming.
 - **No license file is included.** Choosing a license is left to the repository owner.
 
 ## Credits
