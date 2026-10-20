@@ -190,7 +190,29 @@ export class Game {
   /* ------------------------------------------------------------------ */
 
   start() {
-    this.loop.start();
+    // Rendering waits for the shaders: drawing earlier would compile them
+    // synchronously and freeze the tab instead.
+    const timeout = new Promise((resolve) => setTimeout(resolve, 15000));
+    Promise.race([this.precompile(), timeout]).finally(() => this.loop.start());
+  }
+
+  /**
+   * Compile every shader up front, including hidden objects (the player is
+   * hidden in the menu) and the shadow and post-processing variants frames
+   * will ask for. With KHR_parallel_shader_compile this happens off the main
+   * thread, so neither the first frame nor the first run stalls.
+   */
+  async precompile() {
+    const r = this.renderer;
+    // Tone mapping and colour space follow the bound target: match the post chain.
+    r.setRenderTarget(this.postfx.composer ? this.postfx.composer.readBuffer : null);
+    try {
+      await r.compileAsync(this.scene, this.camera);
+    } catch {
+      /* fall back to compiling on first use */
+    } finally {
+      r.setRenderTarget(null);
+    }
   }
 
   enterMenu() {

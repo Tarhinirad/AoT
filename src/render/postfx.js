@@ -60,7 +60,10 @@ export class PostFX {
     const composer = new EffectComposer(this.renderer, rt);
     composer.addPass(new RenderPass(this.scene, this.camera));
     if (bloom) {
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.42, 0.55, 0.92);
+      // Threshold sits above sunlit walls, cobbles and clouds: three's bloom passes
+      // the full colour of anything over it, so a low threshold hazed the whole
+      // view when facing the sun. Lanterns, fires and the sun itself still glow.
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.3, 0.35, 1.4);
       composer.addPass(this.bloom);
     }
     this.grade = createGradedOutputPass();
