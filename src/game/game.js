@@ -31,9 +31,12 @@ import { PerfMonitor } from '../core/perf.js';
 import { ScoreKeeper, waveClearBonus } from './score.js';
 import { ATMOS, installFogChunks, createEnvironment } from '../render/atmosphere.js';
 import { PostFX } from '../render/postfx.js';
+import { installShaderFixes } from '../render/shaderFixes.js';
 
-// Sun-tinted height fog replaces three's fog chunks; must precede any shader compile.
+// Sun-tinted height fog replaces three's fog chunks, and flat shading gets a NaN
+// guard; both must precede any shader compile.
 installFogChunks();
+installShaderFixes();
 
 const SPAWN = new THREE.Vector3(0, 3, 40);
 const tmpF = new THREE.Vector3();

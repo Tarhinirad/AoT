@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { SCRUB_HDR_GLSL } from './shaderFixes.js';
 
 /**
  * Linear-HDR colour grade: warm highlights, cool shadows, a touch of contrast,
@@ -33,8 +34,8 @@ function createGradedOutputPass() {
   const mat = pass.material;
   Object.assign(mat.uniforms, GRADE_UNIFORMS);
   mat.fragmentShader = mat.fragmentShader
-    .replace('uniform sampler2D tDiffuse;', 'uniform sampler2D tDiffuse;\n\t\tuniform float uVignette, uSaturation, uHurt;')
-    .replace('gl_FragColor = texture2D( tDiffuse, vUv );', 'gl_FragColor = texture2D( tDiffuse, vUv );' + GRADE_GLSL);
+    .replace('uniform sampler2D tDiffuse;', 'uniform sampler2D tDiffuse;\n\t\tuniform float uVignette, uSaturation, uHurt;' + SCRUB_HDR_GLSL)
+    .replace('gl_FragColor = texture2D( tDiffuse, vUv );', 'gl_FragColor = vec4( scrubHdr( texture2D( tDiffuse, vUv ).rgb ), 1.0 );' + GRADE_GLSL);
   return pass;
 }
 
@@ -65,6 +66,12 @@ export class PostFX {
       // the full colour of anything over it, so a low threshold hazed the whole
       // view when facing the sun. Lanterns, fires and the sun itself still glow.
       this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.3, 0.35, 1.4);
+      // Scrub NaN/Inf before the blur: one bad pixel would otherwise spread over the screen.
+      const hp = this.bloom.materialHighPassFilter;
+      hp.fragmentShader = hp.fragmentShader
+        .replace('uniform sampler2D tDiffuse;', 'uniform sampler2D tDiffuse;' + SCRUB_HDR_GLSL)
+        .replace('vec4 texel = texture2D( tDiffuse, vUv );', 'vec4 texel = vec4( scrubHdr( texture2D( tDiffuse, vUv ).rgb ), 1.0 );');
+      hp.needsUpdate = true;
       composer.addPass(this.bloom);
     }
     this.grade = createGradedOutputPass();
