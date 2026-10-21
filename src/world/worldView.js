@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CITY } from './city.js';
 import { ATMOS, createSky } from '../render/atmosphere.js';
-import { createFacadeMaterial, createRoofMaterial, createGroundMaterial, createClothMaterial } from './materials.js';
+import { createFacadeMaterial, createRoofMaterial, createGroundMaterial, createClothMaterial, createFoliageMaterial, createMountainMaterial, GROUND_AO } from './materials.js';
 import { createRng } from '../core/rng.js';
 
 const tmpM = new THREE.Matrix4();
@@ -174,14 +174,12 @@ function mergeSimple(geos) {
   return out;
 }
 
-/** Distant mountain range: a ring of noisy ridges with baked atmospheric haze. */
-function mountainGeometry(r0, r1, hMax, seed, rock, haze, hazeK, snowLine) {
+/** Distant mountain range: a ring of noisy ridges (shaded by createMountainMaterial). */
+function mountainGeometry(r0, r1, hMax, seed) {
   const rng = createRng(seed);
-  const N = 512, R = 10;
+  const N = 768, R = 16;
   const phases = Array.from({ length: 6 }, () => rng.range(0, 6.28));
-  const pos = [], col = [], idx = [];
-  const cRock = new THREE.Color(rock), cHaze = new THREE.Color(haze), cSnow = new THREE.Color(0xf4f1ea);
-  const c = new THREE.Color();
+  const pos = [], idx = [];
   for (let i = 0; i <= N; i++) {
     const a = (i / N) * Math.PI * 2;
     const ridge = 0.55 + 0.25 * Math.sin(a * 3 + phases[0]) + 0.15 * Math.sin(a * 7 + phases[1]) + 0.1 * Math.sin(a * 17 + phases[2]) + 0.06 * Math.sin(a * 41 + phases[3]);
@@ -192,10 +190,6 @@ function mountainGeometry(r0, r1, hMax, seed, rock, haze, hazeK, snowLine) {
       const jag = 0.84 + 0.1 * Math.sin(a * 63 + j * 1.7 + phases[4]) + 0.06 * Math.sin(a * 151 + j * 2.9 + phases[5]);
       const h = Math.max(0, hMax * ridge * prof * jag) - 20;
       pos.push(Math.cos(a) * r, h, Math.sin(a) * r);
-      const hn = h / hMax;
-      c.copy(cRock).lerp(cSnow, snowLine > 0 ? THREE.MathUtils.smoothstep(hn, snowLine, snowLine + 0.12) : 0);
-      c.lerp(cHaze, hazeK * (1 - 0.35 * hn));
-      col.push(c.r, c.g, c.b);
     }
   }
   for (let i = 0; i < N; i++) {
@@ -206,10 +200,77 @@ function mountainGeometry(r0, r1, hMax, seed, rock, haze, hazeK, snowLine) {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
+}
+
+/** Separable box blur (radius r texels), run in place `passes` times (≈ Gaussian). */
+function boxBlur(src, N, r, passes) {
+  const tmp = new Float32Array(N * N);
+  const inv = 1 / (2 * r + 1);
+  for (let p = 0; p < passes; p++) {
+    for (const [a, b, horiz] of [[src, tmp, true], [tmp, src, false]]) {
+      for (let line = 0; line < N; line++) {
+        const at = (i) => (horiz ? line * N + Math.min(N - 1, Math.max(0, i)) : Math.min(N - 1, Math.max(0, i)) * N + line);
+        let sum = 0;
+        for (let i = -r; i <= r; i++) sum += a[at(i)];
+        for (let i = 0; i < N; i++) {
+          b[horiz ? line * N + i : i * N + line] = sum * inv;
+          sum += a[at(i + r + 1)] - a[at(i - r)];
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Ground occlusion (GROUND_AO): footprints of buildings, the curtain wall,
+ * towers and trees, blurred at a tight contact radius and a wide one whose
+ * strength grows with the occluder's height.
+ */
+function groundOcclusionTexture(city) {
+  const N = 512, ext = CITY.HALF + 40, size = ext * 2, k = N / size;
+  const near = new Float32Array(N * N), far = new Float32Array(N * N);
+  const stamp = (x0, z0, x1, z1, inside, nearK, farK) => {
+    const i0 = Math.max(0, Math.floor((x0 + ext) * k)), i1 = Math.min(N - 1, Math.ceil((x1 + ext) * k));
+    const j0 = Math.max(0, Math.floor((z0 + ext) * k)), j1 = Math.min(N - 1, Math.ceil((z1 + ext) * k));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        if (!inside((i + 0.5) / k - ext, (j + 0.5) / k - ext)) continue;
+        const o = j * N + i;
+        near[o] = Math.max(near[o], nearK);
+        far[o] = Math.max(far[o], farK);
+      }
+    }
+  };
+  const rect = (x, z, w, d, nk, fk) => stamp(x - w / 2, z - d / 2, x + w / 2, z + d / 2, () => true, nk, fk);
+  const disc = (x, z, r, nk, fk) => stamp(x - r, z - r, x + r, z + r, (px, pz) => (px - x) ** 2 + (pz - z) ** 2 <= r * r, nk, fk);
+  const tall = (h) => Math.min(1, h / 30);
+  for (const b of city.buildings) {
+    if (b.style === 'round') disc(b.x, b.z, b.w / 2, 1, tall(b.h));
+    else if (b.style === 'pillar') disc(b.x, b.z, 1.3, 0.8, 0.3);
+    else rect(b.x, b.z, b.w, b.d, 1, tall(b.h));
+  }
+  for (const w of city.wall) rect((w.minX + w.maxX) / 2, (w.minZ + w.maxZ) / 2, w.maxX - w.minX, w.maxZ - w.minZ, 1, 1);
+  for (const t of city.wallTowers) disc(t.x, t.z, t.r, 1, 1);
+  for (const t of city.trees) {
+    disc(t.x, t.z, t.canopyR * 0.9, 0.25, 0.45);
+    disc(t.x, t.z, t.r, 0.8, 0.45);
+  }
+  for (const d of city.depots) rect(d.x, d.z, 8, 8, 0.6, 0.1);
+  boxBlur(near, N, 2, 3);
+  boxBlur(far, N, 6, 3);
+  const data = new Uint8Array(N * N);
+  for (let i = 0; i < N * N; i++) data[i] = Math.min(255, (near[i] * 0.6 + far[i] * 0.5) * 255);
+  const tex = new THREE.DataTexture(data, N, N, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  GROUND_AO.uGroundAO.value = tex;
+  GROUND_AO.uGroundAOBox.value.set(-ext, -ext, 1 / size);
+  return tex;
 }
 
 export class WorldView {
@@ -232,6 +293,7 @@ export class WorldView {
     this.boxGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     this.cylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 24, 1, true).translate(0, 0.5, 0);
     this._buildLights(quality);
+    groundOcclusionTexture(city);
     this._buildGround();
     this._buildBuildings();
     this._buildWall();
@@ -497,7 +559,7 @@ export class WorldView {
     const bark = new THREE.MeshStandardMaterial({ color: 0x4f3a2a, roughness: 0.95 });
     const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.6, 1, 1, 7).translate(0, 0.5, 0), bark, ts.length);
     const coneGeo = new THREE.ConeGeometry(1, 1, 8).translate(0, 0.5, 0);
-    const canopyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.9 });
+    const canopyMat = createFoliageMaterial();
     const layers = 4;
     const cones = new THREE.InstancedMesh(coneGeo, canopyMat, ts.length * layers);
     const greens = [0x2b4d2c, 0x34603a, 0x284629, 0x3d6537, 0x2f5530];
@@ -652,23 +714,21 @@ export class WorldView {
   _buildScenery() {
     const ot = this.city.outerTrees;
     const conifers = ot.filter((t) => !t.broad), broad = ot.filter((t) => t.broad);
-    const leaf = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.9 });
     const cl = conifers.map((t, i) => ({ x: t.x, y: 0, z: t.z, sx: t.canopyR, sy: t.h, sz: t.canopyR, rot: i, color: [0x2f4f2e, 0x375a33, 0x2a4428][i % 3] }));
-    this.group.add(instanced(new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0), leaf, cl, { shadow: false }));
+    this.group.add(instanced(new THREE.ConeGeometry(1, 1, 7).translate(0, 0.5, 0), createFoliageMaterial(), cl, { shadow: false }));
     const bl = [];
     broad.forEach((t, i) => {
       for (let k = 0; k < 3; k++) {
         bl.push({ x: t.x + Math.sin(i + k * 2.1) * t.canopyR * 0.5, y: t.h * (0.45 + k * 0.12), z: t.z + Math.cos(i + k * 2.1) * t.canopyR * 0.5, sx: t.canopyR, sy: t.canopyR * 0.8, sz: t.canopyR, rot: i + k, color: [0x4d6b30, 0x5a7a34, 0x44602c][(i + k) % 3] });
       }
     });
-    this.group.add(instanced(new THREE.IcosahedronGeometry(1, 0), leaf, bl, { shadow: false }));
+    this.group.add(instanced(new THREE.IcosahedronGeometry(1, 0), createFoliageMaterial({ yRange: [-1, 1] }), bl, { shadow: false }));
     const trunks = broad.map((t) => ({ x: t.x, y: 0, z: t.z, sx: 0.8, sy: t.h * 0.55, sz: 0.8 }));
     this.group.add(instanced(new THREE.CylinderGeometry(0.4, 0.6, 1, 6).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0x4a3626 }), trunks, { shadow: false }));
 
     // Two mountain ranges: forested foothills and snow-capped peaks, hazed toward the sky.
-    const haze = ATMOS.fogColor.clone().multiplyScalar(1.02).getHex();
-    const hills = new THREE.Mesh(mountainGeometry(820, 1150, 120, 5, 0x3c5236, haze, 0.62, 0), new THREE.MeshLambertMaterial({ vertexColors: true, fog: false }));
-    const peaks = new THREE.Mesh(mountainGeometry(1300, 1750, 330, 11, 0x6f7480, haze, 0.66, 0.58), new THREE.MeshLambertMaterial({ vertexColors: true, fog: false }));
+    const hills = new THREE.Mesh(mountainGeometry(820, 1150, 120, 5), createMountainMaterial({ rock: 0x3c5236, hMax: 120, haze: 0.62 }));
+    const peaks = new THREE.Mesh(mountainGeometry(1300, 1750, 330, 11), createMountainMaterial({ rock: 0x6f7480, hMax: 330, snowLine: 0.58, haze: 0.66 }));
     this.group.add(hills, peaks);
   }
 

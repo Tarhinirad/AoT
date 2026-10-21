@@ -71,10 +71,14 @@ Every action except pause can be rebound (keyboard or mouse button) in **Setting
 - Four supply depots with light-beam beacons.
 
 **Rendering**
-- Golden-hour lighting: a low warm sun with soft shadows, a sky dome with drifting procedural clouds, and an environment map baked from that sky for PBR ambient light.
+- Golden-hour lighting: a low warm sun with soft shadows, a sky dome with drifting procedural clouds (self-shadowed, with high cirrus), and an environment map baked from that sky for PBR ambient light.
 - All surfaces are procedural shaders with no textures: timber framing, windows (a few lit warm), ashlar stone, clay tiles and slate with moss, cobbled streets with a fan-laid market square. Patterns fade out by screen-space derivative so distant facades don't shimmer.
+- Surface relief without normal maps: the same patterns also output a height that drives derivative bump mapping, so mortar joints, recessed windows and doors, proud timbers, lapped roof tiles and domed cobbles catch the low sun.
+- Ground contact occlusion: a top-down mask of building, wall and tree footprints, blurred at two radii at load time, darkens ambient light where streets meet walls and under the forest canopy (one texture fetch).
+- Giants: smooth, muscled bodies (pectorals, deltoids, biceps, quads, calves, brow and cheekbones) with a skin shader: mottled, faintly lumpy flesh, a reddish subsurface glow at the light terminator, a warm rim, and darker undersides.
+- Foliage darkens toward the inside of each canopy layer and glows when backlit; distant mountains are shaded with rock strata, snow and fog-matched haze.
 - Sun-tinted height fog: denser near the ground and glowing warm toward the sun, matched exactly to the sky horizon.
-- Post-processing (medium/high quality): HDR bloom, ACES tone mapping, a warm/cool colour grade, vignette, and edge desaturation when badly hurt.
+- Post-processing (medium/high quality): HDR bloom, quarter-resolution sun shafts (folded into the grade pass, skipped when the sun is off screen), ACES tone mapping, a warm/cool colour grade with a gentle contrast curve, dithering against sky banding, vignette, and edge desaturation when badly hurt.
 
 **Game loop and UI**
 - Wave mode: 10 escalating waves (large giants from wave 3, abnormals from wave 4), trickle spawns, intermissions, and victory.

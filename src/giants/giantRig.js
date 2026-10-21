@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { GLSL_NOISE } from '../world/materials.js';
+import { ATMOS } from '../render/atmosphere.js';
 
 /**
  * Procedural low-poly giant. All dimensions are fractions of the giant's
@@ -16,14 +18,67 @@ const SHARED = {};
 function sharedGeos() {
   if (SHARED.box) return SHARED;
   SHARED.box = new THREE.BoxGeometry(1, 1, 1);
-  SHARED.limb = new THREE.CylinderGeometry(0.5, 0.42, 1, 6).translate(0, -0.5, 0);
-  SHARED.head = new THREE.IcosahedronGeometry(0.5, 1);
-  SHARED.sphere = new THREE.IcosahedronGeometry(0.5, 0);
-  SHARED.torso = new THREE.CylinderGeometry(0.5, 0.42, 1, 7);
+  SHARED.limb = new THREE.CylinderGeometry(0.5, 0.42, 1, 12, 2).translate(0, -0.5, 0);
+  SHARED.head = new THREE.IcosahedronGeometry(0.5, 3);
+  SHARED.sphere = new THREE.IcosahedronGeometry(0.5, 2);
+  SHARED.torso = new THREE.CylinderGeometry(0.5, 0.42, 1, 14, 2);
   SHARED.dark = new THREE.MeshStandardMaterial({ color: 0x1c1512, roughness: 0.6 });
   SHARED.teeth = new THREE.MeshStandardMaterial({ color: 0xe8e0cc, roughness: 0.4 });
   SHARED.napeMat = new THREE.MeshStandardMaterial({ color: 0x8a2f2a, emissive: 0x4a0a06, roughness: 0.5 });
   return SHARED;
+}
+
+const SUN = ATMOS.sunDir;
+
+/**
+ * Giant skin: smooth shading with mottled, faintly lumpy flesh (bump from
+ * bone-space noise, so it sticks to the body), a reddish subsurface glow at
+ * the light terminator and a warm rim. Emissive stays free for the telegraph
+ * and hit flashes.
+ */
+function createSkinMaterial(color, H) {
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.62, emissive: 0x000000 });
+  mat.customProgramCacheKey = () => 'giant-skin';
+  const uH = { value: 1 / H };
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uSkinInvH = uH;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSkinP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSkinP = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vSkinP;
+        uniform float uSkinInvH;
+        ${GLSL_NOISE}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        vec3 sp = vSkinP * uSkinInvH * 60.0;
+        vec2 sq = sp.xy + sp.z * vec2(0.71, 0.53);
+        float blotch = fbm3(sq * 0.5);
+        float pores = vnoise(sq * 6.0);
+        diffuseColor.rgb *= 0.9 + 0.16 * blotch;
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.08, 0.82, 0.8), smoothstep(0.55, 0.8, blotch) * 0.3);
+        float skinH = (blotch * 0.6 + pores * 0.06) / (uSkinInvH * 60.0);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = bumpNormal(-vViewPosition, normal, skinH * 0.4, faceDirection);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        {
+          vec3 sunV = normalize((viewMatrix * vec4(${`vec3(${SUN.x.toFixed(4)}, ${SUN.y.toFixed(4)}, ${SUN.z.toFixed(4)})`}, 0.0)).xyz);
+          vec3 vd = normalize(vViewPosition);
+          float nl = dot(normal, sunV);
+          float sss = max(0.0, nl * 0.5 + 0.5) - max(0.0, nl);
+          float rim = pow(1.0 - max(dot(normal, vd), 0.0), 3.0);
+          totalEmissiveRadiance += diffuseColor.rgb * (vec3(1.0, 0.38, 0.28) * sss * 0.35 + vec3(1.0, 0.75, 0.6) * rim * 0.22);
+        }`)
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        {
+          // Cheap cavity term: undersides (chin, armpits, under the belly) sit in shadow.
+          float up = inverseTransformDirection(normal, viewMatrix).y;
+          float occ = mix(0.55, 1.0, smoothstep(-0.8, 0.5, up));
+          reflectedLight.indirectDiffuse *= occ;
+          reflectedLight.indirectSpecular *= occ;
+        }`);
+  };
+  return mat;
 }
 
 const SKINS = [0xe3b39a, 0xd8a184, 0xc98c6f, 0xe8c3a6, 0xb97a60, 0xd49a88];
@@ -32,8 +87,8 @@ const HAIRS = [0x2a1d14, 0x4b3322, 0x7a5a36, 0x1a1a1a, 0x9c8a6a];
 export function buildGiantRig(H, rng, abnormal = false) {
   const G = sharedGeos();
   const skinColor = rng.pick(SKINS);
-  const skin = new THREE.MeshStandardMaterial({ color: skinColor, flatShading: true, emissive: 0x000000, roughness: 0.62 });
-  const hairMat = new THREE.MeshStandardMaterial({ color: rng.pick(HAIRS), flatShading: true, roughness: 0.9 });
+  const skin = createSkinMaterial(skinColor, H);
+  const hairMat = new THREE.MeshStandardMaterial({ color: rng.pick(HAIRS), roughness: 0.85 });
 
   // Proportion variation for an uncanny look
   const headS = rng.range(0.14, 0.18) * (abnormal ? 1.15 : 1);
@@ -71,8 +126,13 @@ export function buildGiantRig(H, rng, abnormal = false) {
   mesh(G.torso, skin, spine, 0.22 * belly, torsoLen * 0.7, 0.15 * belly, 0, torsoLen * 0.32, 0);
   const chest = mk('chest', spine, 0, torsoLen * 0.62, 0);
   mesh(G.torso, skin, chest, 0.26, 0.14, 0.16, 0, 0.02, 0);
-  // Rib/abs hint
-  mesh(G.box, skin, chest, 0.16, 0.05, 0.02, 0, -0.03, 0.075);
+  // Musculature: pectorals, trapezius, a rounded belly and ribcage.
+  for (const s of [-1, 1]) mesh(G.sphere, skin, chest, 0.12, 0.075, 0.05, s * 0.056, 0.012, 0.058);
+  mesh(G.sphere, skin, chest, 0.22, 0.07, 0.13, 0, 0.075, -0.01);
+  mesh(G.sphere, skin, spine, 0.2 * belly, 0.2, 0.15 * belly, 0, 0.1, 0.02 * belly);
+  mesh(G.sphere, skin, chest, 0.24, 0.13, 0.15, 0, -0.02, 0.0);
+  // Glutes
+  for (const s of [-1, 1]) mesh(G.sphere, skin, hips, 0.11, 0.12, 0.09, s * 0.055, -0.02, -0.045);
 
   const neck = mk('neck', chest, 0, 0.09, -0.01);
   mesh(G.limb, skin, neck, 0.075, -0.07, 0.075, 0, 0, 0);
@@ -81,9 +141,13 @@ export function buildGiantRig(H, rng, abnormal = false) {
   napeMark.userData.keep = true; // hidden on death, so never merged
   const head = mk('head', neck, 0, 0.07 + headS * 0.45, 0.005);
   mesh(G.head, skin, head, headS * 0.9, headS, headS * 0.95);
-  // Face: eyes, grin, nose, ears
+  // Face: brow ridge, cheekbones, jaw, sunken eyes, grin, nose, ears
+  mesh(G.sphere, skin, head, headS * 0.62, headS * 0.12, headS * 0.16, 0, headS * 0.17, headS * 0.38);
+  mesh(G.sphere, skin, head, headS * 0.62, headS * 0.34, headS * 0.5, 0, -headS * 0.28, headS * 0.16);
   for (const s of [-1, 1]) {
-    mesh(G.sphere, G.dark, head, headS * 0.16, headS * 0.1, headS * 0.08, s * headS * 0.19, headS * 0.08, headS * 0.43);
+    mesh(G.sphere, G.teeth, head, headS * 0.17, headS * 0.11, headS * 0.08, s * headS * 0.19, headS * 0.07, headS * 0.42);
+    mesh(G.sphere, G.dark, head, headS * 0.07, headS * 0.07, headS * 0.04, s * headS * 0.19, headS * 0.07, headS * 0.46);
+    mesh(G.sphere, skin, head, headS * 0.2, headS * 0.12, headS * 0.14, s * headS * 0.25, -headS * 0.04, headS * 0.36);
     mesh(G.sphere, skin, head, headS * 0.12, headS * 0.22, headS * 0.1, s * headS * 0.46, 0, 0);
   }
   mesh(G.box, G.teeth, head, headS * 0.46, headS * 0.08, headS * 0.05, 0, -headS * 0.22, headS * 0.42);
@@ -98,13 +162,15 @@ export function buildGiantRig(H, rng, abnormal = false) {
   for (const [side, s] of [['L', 1], ['R', -1]]) {
     const sh = mk('shoulder' + side, chest, s * 0.14, 0.05, 0);
     sh.rotation.order = 'YXZ'; // pitch the arm first, then yaw it horizontally (aiming / sweeping)
-    mesh(G.sphere, skin, sh, 0.085, 0.085, 0.085);
+    mesh(G.sphere, skin, sh, 0.1, 0.1, 0.1, s * 0.008, -0.005, 0);
     const up = 0.18 * armL, fore = 0.17 * armL;
     const upper = new THREE.Group();
     sh.add(upper);
     mesh(G.limb, skin, upper, 0.07, up, 0.07);
+    mesh(G.sphere, skin, upper, 0.075, up * 0.62, 0.08, 0, -up * 0.48, 0.008);
     const el = mk('elbow' + side, upper, 0, -up, 0);
     mesh(G.limb, skin, el, 0.058, fore, 0.058);
+    mesh(G.sphere, skin, el, 0.07, fore * 0.55, 0.066, 0, -fore * 0.3, 0);
     const hand = mk('hand' + side, el, 0, -fore, 0);
     mesh(G.sphere, skin, hand, 0.07, 0.09, 0.05, 0, -0.035, 0);
     arms[side] = { shoulder: sh, upper, elbow: el, hand, up, fore };
@@ -116,8 +182,11 @@ export function buildGiantRig(H, rng, abnormal = false) {
     const hip = mk('hip' + side, hips, s * 0.065, -0.02, 0);
     const thighL = 0.23 * legL, shinL = 0.22 * legL;
     mesh(G.limb, skin, hip, 0.1, thighL, 0.1);
+    mesh(G.sphere, skin, hip, 0.11, thighL * 0.7, 0.115, 0, -thighL * 0.42, 0.008);
     const knee = mk('knee' + side, hip, 0, -thighL, 0);
     mesh(G.limb, skin, knee, 0.08, shinL, 0.08);
+    mesh(G.sphere, skin, knee, 0.075, 0.06, 0.07, 0, -0.005, 0.012);
+    mesh(G.sphere, skin, knee, 0.088, shinL * 0.5, 0.09, 0, -shinL * 0.3, -0.016);
     mesh(G.box, skin, knee, 0.08, 0.035, 0.13, 0, -shinL - 0.005, 0.03);
     legs[side] = { hip, knee, thighL, shinL };
   }

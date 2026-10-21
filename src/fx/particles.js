@@ -49,7 +49,10 @@ export class Particles {
           vec2 d = gl_PointCoord - 0.5;
           float r = dot(d, d) * 4.0;
           if (r > 1.0) discard;
-          gl_FragColor = vec4(vC, vA * (1.0 - r));
+          // Soft gaussian puff, lit a little from above so smoke and steam read as volumes.
+          float a = exp(-r * 2.6) * (1.0 - r);
+          vec3 c = vC * (1.08 - 0.35 * (d.y + 0.5) * r - 0.12 * r);
+          gl_FragColor = vec4(c, vA * a * 1.25);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,

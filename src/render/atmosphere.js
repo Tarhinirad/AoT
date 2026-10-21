@@ -120,11 +120,17 @@ export function createSkyMaterial() {
           float wisps = fbm(uv * 4.0 + 3.1);
           float cover = smoothstep(0.5, 0.78, n * 0.85 + wisps * 0.25) * smoothstep(0.0, 0.2, h);
           float thick = smoothstep(0.55, 0.9, n);
-          vec3 lit = mix(vec3(1.0, 0.95, 0.9), uSunColor * 1.6, pow(sd, 3.0) * 0.8 + 0.15);
-          vec3 shade = mix(vec3(0.52, 0.52, 0.62), uFogSun * 0.7, 0.25);
-          vec3 cc = mix(lit, shade, thick * 0.75);
+          // Self-shadowing: more cloud a step toward the sun means a darker, bluer side.
+          float toward = fbm((uv + normalize(uSunDir.xz + 1e-4) * 0.12) * 1.4);
+          float selfShadow = clamp(0.5 + (n - toward) * 4.0, 0.0, 1.0);
+          vec3 lit = mix(vec3(1.0, 0.95, 0.9), uSunColor * 1.35, pow(sd, 3.0) * 0.8 + 0.15);
+          vec3 shade = mix(vec3(0.5, 0.52, 0.64), uFogSun * 0.7, 0.25);
+          vec3 cc = mix(shade, lit, selfShadow * (1.0 - thick * 0.45));
           // Silver lining around the sun.
-          cc += uSunColor * pow(sd, 12.0) * (1.0 - thick) * 1.5;
+          cc += uSunColor * pow(sd, 12.0) * (1.0 - thick) * 0.9;
+          // High cirrus streaks.
+          float cirrus = smoothstep(0.55, 0.85, fbm(vec2(uv.x * 0.5, uv.y * 3.0) + 7.3)) * smoothstep(0.05, 0.4, h) * (1.0 - cover);
+          sky = mix(sky, mix(sky, vec3(1.0, 0.97, 0.94), 0.55), cirrus * 0.5);
           sky = mix(sky, cc, cover * 0.9);
         }
         if (uEnv < 0.5) sky += uSunColor * smoothstep(0.99935, 0.9997, sd) * 40.0;

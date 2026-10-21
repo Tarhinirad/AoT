@@ -26,7 +26,7 @@ export class PlayerView {
     this.root = new THREE.Group();
     this.body = new THREE.Group(); // leans/rotates
     this.root.add(this.body);
-    const cloak = new THREE.MeshStandardMaterial({ color: 0x2f5a36, flatShading: true, roughness: 0.85, map: cloakTexture() });
+    const cloak = new THREE.MeshStandardMaterial({ color: 0x2f5a36, roughness: 0.85, map: cloakTexture() });
     const skin = new THREE.MeshStandardMaterial({ color: 0xe0b48f, roughness: 0.7 });
     const leather = new THREE.MeshStandardMaterial({ color: 0x5e3f26, roughness: 0.65 });
     const metal = new THREE.MeshStandardMaterial({ color: 0xaab3bd, roughness: 0.3, metalness: 0.9 });
@@ -34,21 +34,21 @@ export class PlayerView {
     const hair = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.9 });
     this.bladeMat = new THREE.MeshStandardMaterial({ color: 0xe8f0f6, roughness: 0.15, metalness: 1, emissive: 0x16222e });
 
-    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.22, 0.7, 6), white);
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.22, 0.7, 12), white);
     torso.position.y = 0.15;
     this.body.add(torso);
-    const jacket = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.28, 0.42, 6), leather);
+    const jacket = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.28, 0.42, 12), leather);
     jacket.position.y = 0.32;
     this.body.add(jacket);
-    const cape = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.95, 8, 1, true), cloak);
+    const cape = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.95, 16, 3, true), cloak);
     cape.position.set(0, 0.05, 0.12);
     cape.material.side = THREE.DoubleSide;
     this.cape = cape;
     this.body.add(cape);
-    const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.19, 0), skin);
+    const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.19, 2), skin);
     head.position.y = 0.72;
     this.body.add(head);
-    const hairM = new THREE.Mesh(new THREE.IcosahedronGeometry(0.2, 0), hair);
+    const hairM = new THREE.Mesh(new THREE.IcosahedronGeometry(0.2, 2), hair);
     hairM.position.set(0, 0.78, 0.04);
     hairM.scale.set(1, 0.7, 1);
     this.body.add(hairM);
@@ -57,7 +57,7 @@ export class PlayerView {
     for (const s of [-1, 1]) {
       const leg = new THREE.Group();
       leg.position.set(0.11 * s, -0.2, 0);
-      const m = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.6, 0.16), white);
+      const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.46, 4, 10), white);
       m.position.y = -0.3;
       leg.add(m);
       const boot = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.22, 0.2), leather);
@@ -68,7 +68,7 @@ export class PlayerView {
     }
     // Gear: canisters at the hips, blade boxes
     for (const s of [-1, 1]) {
-      const can = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.55, 6), metal);
+      const can = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.55, 12), metal);
       can.rotation.x = Math.PI / 2;
       can.position.set(0.33 * s, -0.12, 0.1);
       this.body.add(can);
@@ -82,7 +82,7 @@ export class PlayerView {
     for (const s of [-1, 1]) {
       const arm = new THREE.Group();
       arm.position.set(0.32 * s, 0.42, 0);
-      const m = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.55, 0.11), white);
+      const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.058, 0.44, 4, 10), white);
       m.position.y = -0.26;
       arm.add(m);
       const blade = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.08, 0.95), this.bladeMat);
