@@ -74,10 +74,15 @@ export function saveSettings(settings) {
   }
 }
 
+/**
+ * pixelRatio caps the internal render resolution (the canvas stays at the
+ * display's own). MSAA samples apply to the render chain's target; the canvas
+ * itself is never multisampled.
+ */
 export const QUALITY_PRESETS = {
-  low: { pixelRatio: 0.75, shadows: false, shadowSize: 0, particles: 800, fogFar: 400, antialias: false, post: false, bloom: false },
-  medium: { pixelRatio: 1.0, shadows: true, shadowSize: 2048, particles: 1800, fogFar: 560, antialias: true, post: true, bloom: true },
-  high: { pixelRatio: 2.0, shadows: true, shadowSize: 4096, particles: 3000, fogFar: 720, antialias: true, post: true, bloom: true },
+  low: { pixelRatio: 0.75, shadows: false, shadowSize: 0, particles: 800, fogFar: 400, msaa: 0, bloom: false },
+  medium: { pixelRatio: 1.0, shadows: true, shadowSize: 2048, particles: 1800, fogFar: 560, msaa: 2, bloom: true },
+  high: { pixelRatio: 2.0, shadows: true, shadowSize: 4096, particles: 3000, fogFar: 720, msaa: 4, bloom: true },
 };
 
 /** Human readable label for a key/mouse code. */

@@ -101,7 +101,8 @@ export class Menus {
       <button class="btn primary" data-act="resume">RESUME</button>
       <button class="btn" data-act="settings">SETTINGS</button>
       <button class="btn" data-act="restart">RESTART RUN</button>
-      <button class="btn" data-act="quit">QUIT TO MENU</button>`);
+      <button class="btn" data-act="quit">QUIT TO MENU</button>
+      <p class="hint pause-hint"></p>`);
     pause.addEventListener('click', (e) => {
       const act = e.target.dataset?.act;
       if (act === 'resume') this.cb.onResume();
@@ -239,6 +240,12 @@ export class Menus {
   hideAll() {
     for (const el of Object.values(this.screens)) el.classList.remove('visible');
     this.current = null;
+    // A button that keeps focus would be "clicked" by Space (the boost key) mid-game.
+    if (this.root.contains(document.activeElement)) document.activeElement.blur();
+  }
+
+  setPauseHint(text) {
+    this.screens.pause.querySelector('.pause-hint').textContent = text;
   }
 
   _fillResults(d) {

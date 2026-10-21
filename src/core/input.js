@@ -16,6 +16,9 @@ export class Input {
     this.enabled = true;
     this.captureListener = null; // used by the key-rebinding UI
     this.onLockChange = null;
+    this.onLockError = null;
+    this.rawMouse = true;
+    this.lockReturnsPromise = false;
 
     const press = (code) => {
       if (this.captureListener) {
@@ -59,23 +62,36 @@ export class Input {
       if (!this.locked) this.down.clear();
       this.onLockChange?.(this.locked);
     });
+    // Older browsers report failures only through this event (no promise).
+    document.addEventListener('pointerlockerror', () => {
+      if (!this.lockReturnsPromise) this.onLockError?.();
+    });
   }
 
+  /**
+   * Capture the mouse. Raw (unaccelerated) movement is preferred and dropped
+   * if the browser doesn't support it. Any other failure, e.g. Chrome's
+   * cooldown right after Esc released the lock, calls `onLockError` so the
+   * game doesn't keep running with no mouse control.
+   */
   requestLock() {
     if (document.pointerLockElement === this.element) return;
+    const fail = () => this.onLockError?.();
     try {
-      const p = this.element.requestPointerLock?.({ unadjustedMovement: true });
-      if (p && p.catch) {
-        p.catch(() => {
-          try {
-            this.element.requestPointerLock();
-          } catch {
-            /* ignore */
+      const p = this.element.requestPointerLock?.(this.rawMouse ? { unadjustedMovement: true } : undefined);
+      this.lockReturnsPromise = !!(p && p.catch);
+      if (this.lockReturnsPromise) {
+        p.catch((err) => {
+          if (this.rawMouse && err?.name === 'NotSupportedError') {
+            this.rawMouse = false;
+            this.requestLock();
+          } else {
+            fail();
           }
         });
       }
     } catch {
-      /* ignore */
+      fail();
     }
   }
 

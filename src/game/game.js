@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { FixedLoop } from '../core/loop.js';
 import { Input } from '../core/input.js';
-import { loadSettings, QUALITY_PRESETS, codeLabel } from '../core/settings.js';
+import { loadSettings, saveSettings, QUALITY_PRESETS, codeLabel } from '../core/settings.js';
 import { createRng } from '../core/rng.js';
 import { StaticColliders } from '../world/colliders.js';
 import { generateCity, buildColliders } from '../world/city.js';
@@ -31,9 +31,12 @@ import { PerfMonitor } from '../core/perf.js';
 import { ScoreKeeper, waveClearBonus } from './score.js';
 import { ATMOS, installFogChunks, createEnvironment } from '../render/atmosphere.js';
 import { PostFX } from '../render/postfx.js';
+import { installShaderFixes } from '../render/shaderFixes.js';
 
-// Sun-tinted height fog replaces three's fog chunks; must precede any shader compile.
+// Sun-tinted height fog replaces three's fog chunks, and flat shading gets a NaN
+// guard; both must precede any shader compile.
 installFogChunks();
+installShaderFixes();
 
 const SPAWN = new THREE.Vector3(0, 3, 40);
 const tmpF = new THREE.Vector3();
@@ -59,7 +62,9 @@ export class Game {
     this.rng = createRng((Date.now() ^ 0x5bd1e995) >>> 0);
     this.debug = new URLSearchParams(location.search);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: this.quality.antialias, powerPreference: 'high-performance' });
+    // No MSAA on the canvas: the post chain renders into its own (optionally
+    // multisampled) target, and a multisampled canvas would only add a resolve.
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     this.renderer.domElement.classList.add('gl');
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -126,6 +131,7 @@ export class Game {
       onSettingsChanged: (q) => this.onSettingsChanged(q),
     });
     this.input.onLockChange = (locked) => this.onLockChange(locked);
+    this.input.onLockError = () => this.onLockError();
 
     // Audio starts on the first user gesture (autoplay policy).
     this.audio = new AudioEngine();
@@ -138,10 +144,8 @@ export class Game {
     });
 
     this.perf = new PerfMonitor(this.overlay, this.renderer);
-    this.perf.onRatio = (r) => {
-      this.renderer.setPixelRatio(r);
-      this.resize();
-    };
+    this.perf.onRatio = (r) => this.setRenderScale(r);
+    this.perf.onTooSlow = () => this.lowerQuality();
     if (this.debug.has('fps')) this.perf.toggle();
     window.addEventListener('keydown', (e) => {
       if (e.code === 'F3') {
@@ -186,7 +190,29 @@ export class Game {
   /* ------------------------------------------------------------------ */
 
   start() {
-    this.loop.start();
+    // Rendering waits for the shaders: drawing earlier would compile them
+    // synchronously and freeze the tab instead.
+    const timeout = new Promise((resolve) => setTimeout(resolve, 15000));
+    Promise.race([this.precompile(), timeout]).finally(() => this.loop.start());
+  }
+
+  /**
+   * Compile every shader up front, including hidden objects (the player is
+   * hidden in the menu) and the shadow and post-processing variants frames
+   * will ask for. With KHR_parallel_shader_compile this happens off the main
+   * thread, so neither the first frame nor the first run stalls.
+   */
+  async precompile() {
+    const r = this.renderer;
+    // Tone mapping and colour space follow the bound target: match the render chain.
+    r.setRenderTarget(this.postfx.composer.readBuffer);
+    try {
+      await r.compileAsync(this.scene, this.camera);
+    } catch {
+      /* fall back to compiling on first use */
+    } finally {
+      r.setRenderTarget(null);
+    }
   }
 
   enterMenu() {
@@ -233,6 +259,7 @@ export class Game {
     if (this.state !== 'playing') return;
     this.state = 'paused';
     this.audio.update(0, false, false, false);
+    this.menus.setPauseHint('');
     this.menus.show('pause');
     this.input.exitLock();
   }
@@ -279,37 +306,95 @@ export class Game {
     if (!locked && this.state === 'playing' && !this.debug.has('autoplay')) this.pause();
   }
 
+  /** The mouse couldn't be captured: pause rather than run with no aiming. */
+  onLockError() {
+    if (this.debug.has('autoplay')) return;
+    if (this.state === 'playing') this.pause();
+    if (this.state === 'paused') this.menus.setPauseHint("Couldn't capture the mouse. Click RESUME to try again.");
+  }
+
+  /**
+   * Even the lowest dynamic resolution can't keep up: drop one graphics preset.
+   * Dropping shadows needs new shader variants, so they compile in the
+   * background first (frames keep using the current ones) and the switch
+   * happens once they're ready, with no freeze.
+   */
+  async lowerQuality() {
+    const order = ['high', 'medium', 'low'];
+    const i = order.indexOf(this.settings.quality);
+    if (this._lowering || i < 0 || i >= order.length - 1) return;
+    this._lowering = true;
+    const next = order[i + 1];
+    const q = QUALITY_PRESETS[next];
+    if (q.shadows !== this.quality.shadows) await this.precompileShadows(q.shadows);
+    this._lowering = false;
+    if (this.settings.quality !== order[i]) return; // the player changed it meanwhile
+    this.settings.quality = next;
+    saveSettings(this.settings);
+    this.applyQuality(true);
+    this.feedback.toast(`Graphics lowered to ${next.toUpperCase()} to keep the game smooth`, 3);
+  }
+
+  /** Compile the scene's shaders for the given shadow setting without switching to it. */
+  async precompileShadows(on) {
+    const r = this.renderer, sun = this.worldView.sun;
+    const prev = [r.shadowMap.enabled, sun.castShadow];
+    let ready;
+    r.shadowMap.enabled = on;
+    sun.castShadow = on;
+    r.setRenderTarget(this.postfx.composer.readBuffer);
+    try {
+      ready = r.compileAsync(this.scene, this.camera); // compiles now, resolves when linked
+    } catch {
+      ready = Promise.resolve();
+    } finally {
+      r.setRenderTarget(null);
+      [r.shadowMap.enabled, sun.castShadow] = prev;
+    }
+    const timeout = new Promise((resolve) => setTimeout(resolve, 10000));
+    await Promise.race([ready.catch(() => {}), timeout]);
+  }
+
   onSettingsChanged(qualityChanged) {
     if (qualityChanged) this.applyQuality();
     this.audio.setVolume(this.settings.volume);
   }
 
-  applyQuality() {
+  /** @param {boolean} keepScale stay at the current dynamic resolution (automatic fallback) */
+  applyQuality(keepScale = false) {
+    const shadowsBefore = this.renderer.shadowMap.enabled;
     this.quality = QUALITY_PRESETS[this.settings.quality] || QUALITY_PRESETS.medium;
-    const ratio = Math.min(window.devicePixelRatio || 1, this.quality.pixelRatio);
-    this.renderer.setPixelRatio(ratio);
-    if (this.perf) {
-      this.perf.dynamic = this.settings.dynamicRes;
-      this.perf.setMax(ratio);
-    }
+    this.perf.dynamic = this.settings.dynamicRes;
+    this.perf.setMax(Math.min(window.devicePixelRatio || 1, this.quality.pixelRatio), keepScale);
     this.renderer.shadowMap.enabled = this.quality.shadows;
     this.scene.fog.far = this.quality.fogFar;
-    this.postfx.setEnabled(!!this.quality.post, { msaa: this.quality.antialias ? 4 : 0, bloom: !!this.quality.bloom });
+    this.postfx.configure({ msaa: this.quality.msaa, bloom: !!this.quality.bloom });
     this.worldView.applyQuality(this.quality);
-    // Materials must recompile when the shadow map toggles.
-    this.scene.traverse((o) => {
-      if (o.material) o.material.needsUpdate = true;
-    });
-    this.resize();
+    // Materials need their shadow variants when the shadow map toggles.
+    if (shadowsBefore !== this.quality.shadows) {
+      this.scene.traverse((o) => {
+        if (o.material) o.material.needsUpdate = true;
+      });
+    }
+    this.setRenderScale(this.perf.ratio);
+  }
+
+  /** Internal render resolution (pixel ratio). Only the render chain resizes, never the canvas. */
+  setRenderScale(r) {
+    this.postfx.setScale(r);
+    this.particles.setViewportHeight(window.innerHeight * r);
   }
 
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
+    // The canvas runs at the display's own resolution (capped at 2x) so the HUD
+    // and the upscaled image stay sharp; quality only changes the internal scale.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(w, h, false);
-    this.postfx?.resize();
+    this.postfx.resize();
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.particles.setViewportHeight(h * this.renderer.getPixelRatio());
+    this.particles.setViewportHeight(h * this.postfx.scale);
     this.viewW = w;
     this.viewH = h;
   }
@@ -834,7 +919,11 @@ export class Game {
     this.perf.frame(frameDt, this.state === 'playing');
     // Cull giants hidden by fog (saves draw calls and shadow passes).
     const far = this.quality.fogFar + 40;
-    for (const gi of this.giants.giants) gi.root.visible = gi.pos.distanceTo(this.camera.position) < far;
+    const giantAlpha = this.state === 'playing' || this.state === 'menu' ? alpha : 1;
+    for (const gi of this.giants.giants) {
+      gi.root.visible = gi.pos.distanceTo(this.camera.position) < far;
+      gi.interpolate(giantAlpha);
+    }
     this.speedLines.update(frameDt, this.state === 'playing' ? p.speed : 0, this.settings.speedLines);
     this.feedback.update(frameDt, this.camera, this.viewW, this.viewH);
     if (this.state === 'playing' || this.state === 'paused') this.updateHud(frameDt);

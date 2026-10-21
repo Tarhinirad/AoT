@@ -2,45 +2,53 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Pass, FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
+import { SCRUB_HDR_GLSL } from './shaderFixes.js';
 import { ATMOS } from './atmosphere.js';
 
 /**
- * Linear-HDR colour grade: warm highlights, cool shadows, a touch of contrast,
- * sun shafts, vignette, and a little dither against banding in the sky.
+ * Linear-HDR colour grade: sun shafts, a gentle contrast curve, warm
+ * highlights, cool shadows, vignette, and a little dither against banding in
+ * the sky. Spliced into the OutputPass shader ahead of tone mapping so the
+ * grade costs no extra full-screen pass.
  */
-const GradeShader = {
-  uniforms: {
-    tDiffuse: { value: null },
-    tShafts: { value: null },
-    uShafts: { value: 0 },
-    uVignette: { value: 0.9 },
-    uSaturation: { value: 1.05 },
-    uContrast: { value: 1.08 },
-    uHurt: { value: 0 },
-  },
-  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: `uniform sampler2D tDiffuse, tShafts; uniform float uVignette, uSaturation, uContrast, uHurt, uShafts; varying vec2 vUv;
-    void main(){
-      vec3 c = texture2D(tDiffuse, vUv).rgb;
-      c += texture2D(tShafts, vUv).rgb * uShafts;
-      // Contrast pivots on mid grey in linear light, so highlights keep their range.
-      c = pow(max(c, 0.0) / 0.18, vec3(uContrast)) * 0.18;
-      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-      c *= mix(vec3(0.92, 0.97, 1.07), vec3(1.06, 1.0, 0.92), smoothstep(0.05, 0.9, l));
-      c = mix(vec3(l), c, uSaturation);
-      vec2 d = vUv - 0.5;
-      float v = dot(d, d);
-      c *= 1.0 - v * uVignette;
-      // Desaturate toward the edges when badly hurt.
-      c = mix(c, vec3(l) * vec3(1.1, 0.8, 0.75), uHurt * smoothstep(0.05, 0.35, v) * 0.7);
-      float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-      c *= 1.0 + (n - 0.5) * 0.02;
-      gl_FragColor = vec4(c, 1.0);
-    }`,
+const GRADE_UNIFORMS = {
+  uVignette: { value: 0.9 },
+  uSaturation: { value: 1.05 },
+  uContrast: { value: 1.08 },
+  uHurt: { value: 0 },
+  tShafts: { value: null },
+  uShafts: { value: 0 },
 };
+const GRADE_GLSL = `
+      {
+        vec3 c = gl_FragColor.rgb;
+        if (uShafts > 0.0) c += texture2D(tShafts, vUv).rgb * uShafts;
+        // Contrast pivots on mid grey in linear light, so highlights keep their range.
+        c = pow(c / 0.18, vec3(uContrast)) * 0.18;
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c *= mix(vec3(0.93, 0.97, 1.06), vec3(1.05, 1.0, 0.93), smoothstep(0.05, 0.9, l));
+        c = mix(vec3(l), c, uSaturation);
+        vec2 d = vUv - 0.5;
+        float v = dot(d, d);
+        c *= 1.0 - v * uVignette;
+        // Desaturate toward the edges when badly hurt.
+        c = mix(c, vec3(l) * vec3(1.1, 0.8, 0.75), uHurt * smoothstep(0.05, 0.35, v) * 0.7);
+        float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        c *= 1.0 + (n - 0.5) * 0.02;
+        gl_FragColor = vec4(c, 1.0);
+      }`;
+
+function createGradedOutputPass() {
+  const pass = new OutputPass();
+  const mat = pass.material;
+  Object.assign(mat.uniforms, GRADE_UNIFORMS);
+  mat.fragmentShader = mat.fragmentShader
+    .replace('uniform sampler2D tDiffuse;', 'uniform sampler2D tDiffuse;\n\t\tuniform float uVignette, uSaturation, uContrast, uHurt, uShafts;\n\t\tuniform sampler2D tShafts;' + SCRUB_HDR_GLSL)
+    .replace('gl_FragColor = texture2D( tDiffuse, vUv );', 'gl_FragColor = vec4( scrubHdr( texture2D( tDiffuse, vUv ).rgb ), 1.0 );' + GRADE_GLSL);
+  return pass;
+}
 
 const QUAD_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
 
@@ -48,7 +56,8 @@ const QUAD_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(pos
  * Screen-space sun shafts at quarter resolution: keep only the very bright
  * pixels around the sun (sky glow and the disc, so rooftops and towers carve
  * dark gaps), then smear them toward the sun in two radial-blur passes. The
- * grade pass adds the result, so this costs no extra full-resolution pass.
+ * grade adds the result, so this costs no extra full-resolution pass, and
+ * nothing runs while the sun is off screen.
  */
 class SunShaftsPass extends Pass {
   constructor(camera, gradeUniforms) {
@@ -65,8 +74,9 @@ class SunShaftsPass extends Pass {
       uniforms: { tDiffuse: { value: null }, uSun: { value: this.sunUv }, uAspect: { value: 1 } },
       vertexShader: QUAD_VS,
       fragmentShader: `uniform sampler2D tDiffuse; uniform vec2 uSun; uniform float uAspect; varying vec2 vUv;
+        ${SCRUB_HDR_GLSL}
         void main(){
-          vec3 c = texture2D(tDiffuse, vUv).rgb;
+          vec3 c = scrubHdr(texture2D(tDiffuse, vUv).rgb);
           float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
           vec2 d = (vUv - uSun) * vec2(uAspect, 1.0);
           float w = exp(-dot(d, d) * 5.0);
@@ -145,37 +155,47 @@ class SunShaftsPass extends Pass {
 }
 
 /**
- * Optional post-processing chain: scene → bloom → sun shafts → grade → tone map + sRGB.
- * Without it (low quality) the renderer tone maps directly.
+ * Render chain used at every quality level: scene → (bloom) → grade + tone
+ * map + sRGB. The scene renders into the chain's own target at `scale` (a
+ * pixel ratio of CSS pixels) and the final pass stretches it over the canvas,
+ * so dynamic resolution never resizes the canvas itself. Resizing a WebGL
+ * canvas clears it, which shows as a black flash on many GPUs.
  */
 export class PostFX {
   constructor(renderer, scene, camera) {
     this.renderer = renderer;
-    this.enabled = false;
     this.scene = scene;
     this.camera = camera;
     this.composer = null;
+    this.scale = 1;
   }
 
-  setEnabled(on, { msaa = 4, bloom = true, shafts = true } = {}) {
+  /** (Re)build the chain. Low quality has neither MSAA nor bloom but keeps the grade. */
+  configure({ msaa = 0, bloom = true } = {}) {
     this._dispose();
-    this.enabled = on;
-    if (!on) return;
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    const rt = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: msaa });
+    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: msaa });
     const composer = new EffectComposer(this.renderer, rt);
     composer.addPass(new RenderPass(this.scene, this.camera));
     if (bloom) {
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.42, 0.55, 0.92);
+      // Threshold sits above sunlit walls, cobbles and clouds: three's bloom passes
+      // the full colour of anything over it, so a low threshold hazed the whole
+      // view when facing the sun. Lanterns, fires and the sun itself still glow.
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.3, 0.35, 1.4);
+      // Scrub NaN/Inf before the blur: one bad pixel would otherwise spread over the screen.
+      const hp = this.bloom.materialHighPassFilter;
+      hp.fragmentShader = hp.fragmentShader
+        .replace('uniform sampler2D tDiffuse;', 'uniform sampler2D tDiffuse;' + SCRUB_HDR_GLSL)
+        .replace('vec4 texel = texture2D( tDiffuse, vUv );', 'vec4 texel = vec4( scrubHdr( texture2D( tDiffuse, vUv ).rgb ), 1.0 );');
+      hp.needsUpdate = true;
       composer.addPass(this.bloom);
     }
-    this.grade = new ShaderPass(GradeShader);
-    if (shafts) {
-      this.shafts = new SunShaftsPass(this.camera, this.grade.uniforms);
-      composer.addPass(this.shafts);
-    }
+    this.grade = createGradedOutputPass();
+    const gu = this.grade.material.uniforms;
+    gu.uShafts.value = 0;
+    gu.tShafts.value = null;
+    // Shafts ride along with bloom (medium/high); low quality skips both.
+    if (bloom) composer.addPass(new SunShaftsPass(this.camera, gu));
     composer.addPass(this.grade);
-    composer.addPass(new OutputPass());
     this.composer = composer;
     this.resize();
   }
@@ -188,23 +208,27 @@ export class PostFX {
     }
     this.composer = null;
     this.bloom = null;
-    this.shafts = null;
     this.grade = null;
+  }
+
+  /** Internal resolution as a pixel ratio; the canvas keeps its own size. */
+  setScale(ratio) {
+    if (ratio === this.scale) return;
+    this.scale = ratio;
+    this.resize();
   }
 
   resize() {
     if (!this.composer) return;
-    const w = window.innerWidth, h = window.innerHeight;
-    this.composer.setPixelRatio(this.renderer.getPixelRatio());
-    this.composer.setSize(w, h);
+    this.composer.setPixelRatio(this.scale);
+    this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
   setHurt(k) {
-    if (this.grade) this.grade.uniforms.uHurt.value = k;
+    if (this.grade) this.grade.material.uniforms.uHurt.value = k;
   }
 
   render(dt) {
-    if (this.composer) this.composer.render(dt);
-    else this.renderer.render(this.scene, this.camera);
+    this.composer.render(dt);
   }
 }

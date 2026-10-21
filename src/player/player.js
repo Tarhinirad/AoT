@@ -13,6 +13,7 @@ export const PLAYER_CONFIG = {
   impactDamageSpeed: 46, // colliding faster than this into a surface hurts
   impactDamageScale: 0.9,
   maxHealth: 100,
+  stepHeight: 1.3, // walk up ledges this tall (depot platforms, crates, barrels) instead of stopping dead
 };
 
 /**
@@ -114,6 +115,7 @@ export class Player {
 
   collide(colliders, dt) {
     const C = PLAYER_CONFIG;
+    if (this.grounded) this.stepUp(colliders);
     let grounded = false;
     let impact = 0;
     const v = this.vel;
@@ -150,6 +152,43 @@ export class Player {
       this.timeSinceGrounded += dt;
       this.airTime += dt;
     }
+  }
+
+  /**
+   * Walking into a low ledge lifts the body onto it. Runs before the push-out,
+   * which would otherwise shove the sphere back off the ledge's side.
+   */
+  stepUp(colliders) {
+    const p = this.pos, r = this.radius;
+    const feet = p.y - r;
+    let top = -Infinity;
+    for (const c of colliders.query(p.x - r, p.z - r, p.x + r, p.z + r)) {
+      if (!c.solid || c.minY > feet + 0.1) continue;
+      const rise = c.maxY - feet;
+      if (rise <= 0.02 || rise > PLAYER_CONFIG.stepHeight) continue;
+      let d2;
+      if (c.type === 0) {
+        const dx = Math.max(c.minX - p.x, 0, p.x - c.maxX), dz = Math.max(c.minZ - p.z, 0, p.z - c.maxZ);
+        d2 = dx * dx + dz * dz;
+        if (d2 >= r * r) continue;
+      } else if (Math.hypot(p.x - c.x, p.z - c.z) >= c.r + r) {
+        continue;
+      }
+      top = Math.max(top, c.maxY);
+    }
+    if (top === -Infinity) return;
+    // Only step if there's head room on the ledge.
+    const y = top + r;
+    for (const c of colliders.query(p.x - r, p.z - r, p.x + r, p.z + r)) {
+      if (c.solid && c.maxY > top + 0.02 && c.minY < y + r + 1.2 && c.minY > feet + 0.1) {
+        const inside = c.type === 0
+          ? p.x + r > c.minX && p.x - r < c.maxX && p.z + r > c.minZ && p.z - r < c.maxZ
+          : Math.hypot(p.x - c.x, p.z - c.z) < c.r + r;
+        if (inside) return;
+      }
+    }
+    p.y = y;
+    if (this.vel.y < 0) this.vel.y = 0;
   }
 
   damage(amount) {

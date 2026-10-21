@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+const tmpColor = new THREE.Color();
+
 /**
  * Pooled CPU-simulated particles drawn as one THREE.Points with soft round
  * sprites. Used for steam, gas puffs, sparks and dust.
@@ -73,7 +75,7 @@ export class Particles {
    * @param {object} o {color, speed, spread, dir, size, grow, life, gravity, drag, alpha, jitter}
    */
   emit(p, count, o = {}) {
-    const color = new THREE.Color(o.color ?? 0xffffff);
+    const color = tmpColor.set(o.color ?? 0xffffff);
     const speed = o.speed ?? 5;
     const spread = o.spread ?? 1;
     const life = o.life ?? 1;

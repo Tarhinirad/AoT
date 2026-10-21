@@ -57,11 +57,47 @@ function setInstance(mesh, i, x, y, z, sx, sy, sz, rotY = 0, color = null) {
   if (color !== null) mesh.setColorAt(i, tmpC.set(color));
 }
 
-/** Build an InstancedMesh from a list of {x,y,z,sx,sy,sz,rot?,rx?,rz?,color?} entries. */
-function instanced(geo, mat, list, { shadow = true, receive = true } = {}) {
-  const m = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length));
-  m.count = list.length;
+// Big instance lists are split into square tiles so off-screen parts of the
+// town are frustum-culled (main view and shadow map) and nearby tiles draw
+// first, which keeps the expensive facade shaders from shading hidden walls.
+const TILE = 160;
+const TILE_MIN_INSTANCES = 400;
+
+/**
+ * Build instanced geometry from a list of {x,y,z,sx,sy,sz,rot?,rx?,rz?,color?}
+ * entries. Returns one InstancedMesh, or a Group of per-tile InstancedMeshes
+ * for large lists. `attrs` adds per-instance attributes: {name: [itemSize, (e, i) => values]}.
+ */
+function instanced(geo, mat, list, { shadow = true, receive = true } = {}, attrs = null) {
+  if (list.length < TILE_MIN_INSTANCES) return instancedChunk(geo, mat, list, list.map((_, i) => i), shadow, receive, attrs);
+  const tiles = new Map();
   list.forEach((e, i) => {
+    const k = `${Math.floor(e.x / TILE)},${Math.floor(e.z / TILE)}`;
+    if (!tiles.has(k)) tiles.set(k, []);
+    tiles.get(k).push(i);
+  });
+  const group = new THREE.Group();
+  for (const idx of tiles.values()) group.add(instancedChunk(geo, mat, list, idx, shadow, receive, attrs));
+  return group;
+}
+
+function instancedChunk(geo0, mat, list, idx, shadow, receive, attrs) {
+  let geo = geo0;
+  if (attrs) {
+    // Share the vertex buffers; only the per-instance data differs per chunk.
+    geo = new THREE.BufferGeometry();
+    geo.index = geo0.index;
+    for (const [name, a] of Object.entries(geo0.attributes)) geo.setAttribute(name, a);
+    for (const [name, [size, fn]] of Object.entries(attrs)) {
+      const data = new Float32Array(Math.max(1, idx.length) * size);
+      idx.forEach((li, j) => data.set(fn(list[li], li), j * size));
+      geo.setAttribute(name, new THREE.InstancedBufferAttribute(data, size));
+    }
+  }
+  const m = new THREE.InstancedMesh(geo, mat, Math.max(1, idx.length));
+  m.count = idx.length;
+  idx.forEach((li, i) => {
+    const e = list[li];
     tmpP.set(e.x, e.y, e.z);
     tmpQ.setFromEuler(tmpE.set(e.rx || 0, e.rot || 0, e.rz || 0, 'YXZ'));
     tmpS.set(e.sx, e.sy, e.sz);
@@ -79,16 +115,9 @@ function instanced(geo, mat, list, { shadow = true, receive = true } = {}) {
 
 /** Facade instances also carry aFacade = (style, seed, plinth, v offset). */
 function facadeInstanced(geo, mat, list) {
-  const g = geo.clone();
-  const data = new Float32Array(Math.max(1, list.length) * 4);
-  list.forEach((e, i) => {
-    data[i * 4] = e.style;
-    data[i * 4 + 1] = e.seed ?? (i * 0.6180339) % 1 * 50;
-    data[i * 4 + 2] = e.plinth ?? 0;
-    data[i * 4 + 3] = e.voff ?? 0;
+  return instanced(geo, mat, list, undefined, {
+    aFacade: [4, (e, i) => [e.style, e.seed ?? ((i * 0.6180339) % 1) * 50, e.plinth ?? 0, e.voff ?? 0]],
   });
-  g.setAttribute('aFacade', new THREE.InstancedBufferAttribute(data, 4));
-  return instanced(g, mat, list);
 }
 
 /** Heraldic banner texture: coloured field, gold border and a tower emblem, swallowtail hem. */
@@ -557,30 +586,23 @@ export class WorldView {
   _buildTrees() {
     const ts = this.city.trees;
     const bark = new THREE.MeshStandardMaterial({ color: 0x4f3a2a, roughness: 0.95 });
-    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.6, 1, 1, 7).translate(0, 0.5, 0), bark, ts.length);
     const coneGeo = new THREE.ConeGeometry(1, 1, 8).translate(0, 0.5, 0);
     const canopyMat = createFoliageMaterial();
     const layers = 4;
-    const cones = new THREE.InstancedMesh(coneGeo, canopyMat, ts.length * layers);
     const greens = [0x2b4d2c, 0x34603a, 0x284629, 0x3d6537, 0x2f5530];
+    const trunks = [], cones = [];
     ts.forEach((t, i) => {
-      setInstance(trunks, i, t.x, 0, t.z, t.r * 2, t.h, t.r * 2);
+      trunks.push({ x: t.x, y: 0, z: t.z, sx: t.r * 2, sy: t.h, sz: t.r * 2 });
       const span = t.h - t.canopyY;
       for (let k = 0; k < layers; k++) {
         const y = t.canopyY + (k * span) / (layers + 0.4);
         const s = t.canopyR * (1.05 - k * 0.2);
-        tmpC.set(greens[(i + k) % greens.length]).multiplyScalar(0.85 + k * 0.08);
-        setInstance(cones, i * layers + k, t.x, y, t.z, s, span * 0.5, s, i + k * 0.7, tmpC.getHex());
+        const color = tmpC.set(greens[(i + k) % greens.length]).multiplyScalar(0.85 + k * 0.08).getHex();
+        cones.push({ x: t.x, y, z: t.z, sx: s, sy: span * 0.5, sz: s, rot: i + k * 0.7, color });
       }
     });
-    for (const m of [trunks, cones]) {
-      m.castShadow = true;
-      m.receiveShadow = true;
-      m.instanceMatrix.needsUpdate = true;
-      if (m.instanceColor) m.instanceColor.needsUpdate = true;
-      m.computeBoundingSphere();
-      this.group.add(m);
-    }
+    this.group.add(instanced(new THREE.CylinderGeometry(0.6, 1, 1, 7).translate(0, 0.5, 0), bark, trunks));
+    this.group.add(instanced(coneGeo, canopyMat, cones));
   }
 
   _buildMarket() {
